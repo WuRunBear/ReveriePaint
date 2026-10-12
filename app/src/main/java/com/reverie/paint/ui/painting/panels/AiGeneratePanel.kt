@@ -171,6 +171,12 @@ private fun AiPanelIntent(
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         AiPanelHeader(vm = vm)
 
+        // 未配置服务器时摆出生成控件只会让人点了没反应 —— 换成引导去配置的形态
+        if (!generating && !vm.comfyServer.configured) {
+            AiServerGuide(onOpenSettings = { vm.openMoreSettings("COMFY") })
+            return@Column
+        }
+
         // ---- 行 2: 生成方式 / 提示词 / 主按钮 ----
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -675,6 +681,114 @@ private fun AiAdvancedDrawer(
             ToolFloatChip(
                 label = stringResource(R.string.ai_action_random_seed),
                 onClick = { vm.rerollAiSeed() },
+            )
+        }
+        AiServerEntry(vm = vm)
+    }
+}
+
+/**
+ * 服务器入口 (在 ⚙ 抽屉里)。点开跳到设置子页 `COMFY`。
+ *
+ * 右侧露出「已配置 / 未配置」, 让用户不用点进去就知道生成按钮能不能指望。
+ */
+@Composable
+private fun AiServerEntry(vm: PaintViewModel) {
+    val server = vm.comfyServer
+    val interaction = remember { MutableInteractionSource() }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(9.dp))
+            .clickable(interactionSource = interaction, indication = null) { vm.openMoreSettings("COMFY") }
+            .padding(horizontal = 8.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_settings),
+            contentDescription = null,
+            tint = Morandi.subText,
+            modifier = Modifier.size(14.dp),
+        )
+        Text(
+            text = stringResource(R.string.ai_server_settings_title),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.Medium,
+            color = Morandi.text,
+        )
+        Spacer(Modifier.weight(1f))
+        Text(
+            text =
+                if (server.configured) {
+                    stringResource(R.string.ai_server_configured)
+                } else {
+                    stringResource(R.string.ai_server_not_configured_short)
+                },
+            fontSize = 11.sp,
+            color = if (server.configured) Morandi.accent else Morandi.subText,
+        )
+        Icon(
+            painter = painterResource(R.drawable.ic_chevron),
+            contentDescription = null,
+            tint = Morandi.subText.copy(alpha = 0.45f),
+            modifier = Modifier.size(14.dp),
+        )
+    }
+}
+
+/**
+ * 未配置服务器的引导态。
+ *
+ * 替换整段生成控件 (含主按钮), 只留一句说明和一个明确的「去配置」入口 —— 面板不会
+ * 让人觉得「能生成」而实际上什么都不发生。
+ */
+@Composable
+private fun AiServerGuide(onOpenSettings: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(Morandi.panelHi)
+            .padding(horizontal = 12.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_settings),
+            contentDescription = null,
+            tint = Morandi.subText,
+            modifier = Modifier.size(16.dp),
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = stringResource(R.string.ai_server_guide_title),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Morandi.text,
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = stringResource(R.string.ai_server_guide_desc),
+                fontSize = 11.sp,
+                color = Morandi.subText,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(9.dp))
+                .background(Morandi.accent)
+                .clickable { onOpenSettings() }
+                .padding(horizontal = 14.dp, vertical = 8.dp),
+        ) {
+            Text(
+                text = stringResource(R.string.ai_server_guide_action),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Morandi.onAccent,
+                maxLines = 1,
             )
         }
     }

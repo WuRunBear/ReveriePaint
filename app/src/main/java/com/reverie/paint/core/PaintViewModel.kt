@@ -3324,6 +3324,7 @@ class PaintViewModel : ViewModel() {
             syncAuthorProfileToCore()
 
             loadSyncSettings()
+            loadComfySettings()
 
             brushColor = prefs.getString("brushColor", "#000000") ?: "#000000"
             brushSecondaryColor = prefs.getString("brushSecondaryColor", "#ffffff") ?: "#ffffff"
@@ -4945,6 +4946,9 @@ class PaintViewModel : ViewModel() {
 
     /** AI 生图面板的会话 UI 状态。实现在 PaintViewModelComfyUi.kt (partial 扩展) */
     internal val aiUi = AiUiState()
+
+    /** ComfyUI 服务器配置状态。实现在 PaintViewModelComfyUi.kt (partial 扩展) */
+    internal val comfyServer = ComfyServerState()
 
     // Semi-transparent blue overlay bitmap built from the mask, drawn on top
     // of the canvas so the user can see the active selection (Krita-style)

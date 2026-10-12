@@ -84,6 +84,7 @@ enum class SettingsSubPage {
     STYLUS,
     AUTHOR,
     SYNC,
+    COMFY,
     ABOUT,
 }
 
@@ -102,6 +103,7 @@ fun SettingsPageContent(
             if (vm.settingsInitialSubPage == "STYLUS") SettingsSubPage.STYLUS
             else if (vm.settingsInitialSubPage == "GENERAL") SettingsSubPage.GENERAL
             else if (vm.settingsInitialSubPage == "AUTHOR") SettingsSubPage.AUTHOR
+            else if (vm.settingsInitialSubPage == "COMFY") SettingsSubPage.COMFY
             else if (isTabletLandscape) SettingsSubPage.GENERAL
             else SettingsSubPage.MAIN,
         )
@@ -125,6 +127,9 @@ fun SettingsPageContent(
             vm.settingsInitialSubPage = "MAIN"
         } else if (vm.settingsInitialSubPage == "AUTHOR") {
             subPage = SettingsSubPage.AUTHOR
+            vm.settingsInitialSubPage = "MAIN"
+        } else if (vm.settingsInitialSubPage == "COMFY") {
+            subPage = SettingsSubPage.COMFY
             vm.settingsInitialSubPage = "MAIN"
         } else if (vm.settingsInitialSubPage == "ABOUT") {
             subPage = SettingsSubPage.ABOUT
@@ -209,6 +214,12 @@ fun SettingsPageContent(
                         onClick = { subPage = SettingsSubPage.SYNC },
                     )
                     SettingMasterNavRow(
+                        iconRes = R.drawable.ic_magicwand,
+                        title = stringResource(R.string.comfy_page_title),
+                        isSelected = subPage == SettingsSubPage.COMFY,
+                        onClick = { subPage = SettingsSubPage.COMFY },
+                    )
+                    SettingMasterNavRow(
                         iconRes = R.drawable.ic_info_circle,
                         title = stringResource(R.string.settings_about),
                         isSelected = subPage == SettingsSubPage.ABOUT,
@@ -246,6 +257,7 @@ fun SettingsPageContent(
                         SettingsSubPage.STYLUS -> StylusSettingsSubPage(vm = vm, showBackButton = false, onBack = onExit)
                         SettingsSubPage.AUTHOR -> AuthorSettingsSubPage(vm = vm, showBackButton = false, onBack = onExit)
                         SettingsSubPage.SYNC -> SyncSettingsSubPage(vm = vm, showBackButton = false, onBack = onExit)
+                        SettingsSubPage.COMFY -> ComfySettingsSubPage(vm = vm, showBackButton = false, onBack = onExit)
                         SettingsSubPage.ABOUT -> AboutSettingsSubPage(showBackButton = false, onBack = onExit)
                         SettingsSubPage.MAIN -> GeneralSettingsSubPage(vm = vm, showBackButton = false, onBack = onExit)
                     }
@@ -306,6 +318,13 @@ fun SettingsPageContent(
 
                 SettingsSubPage.SYNC -> {
                     SyncSettingsSubPage(
+                        vm = vm,
+                        onBack = { subPage = SettingsSubPage.MAIN },
+                    )
+                }
+
+                SettingsSubPage.COMFY -> {
+                    ComfySettingsSubPage(
                         vm = vm,
                         onBack = { subPage = SettingsSubPage.MAIN },
                     )
@@ -401,6 +420,19 @@ private fun SettingsMainPage(onNavigate: (SettingsSubPage) -> Unit) {
                     summary = stringResource(R.string.settings_nav_sync_sub),
                     shape = settingGroupShape(0, 1),
                     onClick = { onNavigate(SettingsSubPage.SYNC) },
+                )
+            }
+
+            Spacer(Modifier.height(4.dp))
+
+            SettingCategoryTitle(stringResource(R.string.ai_panel_title))
+            SettingGroup {
+                SettingNavGroupItem(
+                    icon = R.drawable.ic_magicwand,
+                    title = stringResource(R.string.comfy_page_title),
+                    summary = stringResource(R.string.comfy_page_subtitle),
+                    shape = settingGroupShape(0, 1),
+                    onClick = { onNavigate(SettingsSubPage.COMFY) },
                 )
             }
 

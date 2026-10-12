@@ -18,6 +18,15 @@ import com.reverie.paint.core.comfy.AiButtonResolver
 import com.reverie.paint.core.comfy.AiContext
 import com.reverie.paint.core.comfy.AiGenerateMode
 import com.reverie.paint.core.comfy.AiSourceKind
+import com.reverie.paint.core.comfy.ComfyAuthMode
+import com.reverie.paint.core.comfy.ComfyCall
+import com.reverie.paint.core.comfy.ComfyClient
+import com.reverie.paint.core.comfy.ComfyConnectionError
+import com.reverie.paint.core.comfy.ComfyCredentialStore
+import com.reverie.paint.core.comfy.ComfyCredentials
+import com.reverie.paint.core.comfy.ComfyServerConfig
+import com.reverie.paint.core.comfy.ComfyUrl
+import com.reverie.paint.core.sync.SyncHttp
 import com.reverie.paint.model.Tool
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -355,4 +364,227 @@ internal fun PaintViewModel.publishAiPanelBounds(boundsPx: RectF?) {
     }
     // 发布一个不可变快照: 发布之后不再修改, 渲染线程只读
     ui.panelBounds = RectF(boundsPx)
+}
+
+// ---------------------------------------------------------------------------
+// 服务器配置 (COMFYUI-DESIGN 服务器页 · 仅配置与测试连接, 不含生成)
+// ---------------------------------------------------------------------------
+
+/**
+ * 连接状态。**分类是刻意的**: 「没配凭据的 401」「凭据错的 401/403」「连不上」
+ * 「服务器报错」要给出互不相同的提示, 混在一起用户会白折腾 (见 ComfyErrorClassifier 的头注释)。
+ */
+internal enum class ComfyConnectionStatus {
+    /** 还没填服务器地址 */
+    NOT_CONFIGURED,
+
+    /** 探测进行中 */
+    TESTING,
+
+    /** 探测成功, [ComfyServerState.statusDetail] 是版本号 (可能为空) */
+    CONNECTED,
+
+    /** 连接失败 / 超时, [ComfyServerState.lastAttemptUrl] 是本次尝试的完整 URL */
+    UNREACHABLE,
+
+    /** 服务端要求认证但本次没带认证头 —— 去配凭据, 不是提示密码错 */
+    AUTH_NOT_CONFIGURED,
+
+    /** 带了认证但被拒 (401/403) —— 检查用户名密码 */
+    AUTH_FAILED,
+
+    /** 其它非 2xx, [ComfyServerState.statusDetail] 是状态码 */
+    SERVER_ERROR,
+
+    /** 地址非法, [ComfyServerState.statusDetail] 是原因 */
+    INVALID_URL,
+}
+
+/** 自定义请求头的一行 (可在 UI 里增删) */
+internal class ComfyHeaderRow(
+    key: String = "",
+    value: String = "",
+) {
+    var key by mutableStateOf(key)
+    var value by mutableStateOf(value)
+}
+
+/**
+ * ComfyUI 服务器的 UI 状态镜像。
+ *
+ * 与 [AiUiState] 分开: 面板状态是「这次生成」的会话, 服务器配置是「这台设备连谁」的持久设置 ——
+ * 两者生命周期不同 (关掉面板不清配置, 换服务器不丢会话)。挂载点见 `PaintViewModel.comfyServer`。
+ */
+internal class ComfyServerState {
+    /** 服务器地址 (用户手填, 测试时规范化) */
+    var baseUrl by mutableStateOf("")
+
+    var authMode by mutableStateOf(ComfyAuthMode.NONE)
+
+    var username by mutableStateOf("")
+
+    /** 是否已有加密保存的密码 (密码明文不挂在这里) */
+    var hasSavedPassword by mutableStateOf(false)
+
+    /** 自定义请求头 (仅 [ComfyAuthMode.CUSTOM_HEADER] 时生效) */
+    val extraHeaders = mutableStateListOf<ComfyHeaderRow>()
+
+    var trustSelfSigned by mutableStateOf(false)
+
+    var status by mutableStateOf(ComfyConnectionStatus.NOT_CONFIGURED)
+
+    /** 状态详情: 版本号 / 状态码 / 地址非法原因 */
+    var statusDetail by mutableStateOf("")
+
+    /** 本次「测试连接」实际尝试的完整 URL, 连不上时显示给用户 */
+    var lastAttemptUrl by mutableStateOf("")
+
+    /** 服务器地址非空即视为「已配置」 */
+    val configured: Boolean get() = baseUrl.isNotBlank()
+}
+
+/** 启动时读一次服务器配置 */
+internal fun PaintViewModel.loadComfySettings() {
+    if (!hasAppContext()) return
+    val config = ComfyCredentialStore.load(appContext)
+    val server = comfyServer
+    server.baseUrl = config.baseUrl
+    server.authMode = config.authMode
+    server.username = config.username
+    server.trustSelfSigned = config.trustSelfSigned
+    server.extraHeaders.clear()
+    config.extraHeaders.forEach { server.extraHeaders.add(ComfyHeaderRow(it.first, it.second)) }
+    server.hasSavedPassword = ComfyCredentialStore.loadPassword(appContext).isNotEmpty()
+    server.status = ComfyConnectionStatus.NOT_CONFIGURED
+    server.statusDetail = ""
+    server.lastAttemptUrl = ""
+}
+
+/** 新增一行空的请求头 */
+internal fun PaintViewModel.addComfyHeaderRow() {
+    comfyServer.extraHeaders.add(ComfyHeaderRow())
+}
+
+/** 删除指定下标的请求头 */
+internal fun PaintViewModel.removeComfyHeaderRow(index: Int) {
+    if (index in comfyServer.extraHeaders.indices) comfyServer.extraHeaders.removeAt(index)
+}
+
+internal fun PaintViewModel.setComfyTrustSelfSigned(value: Boolean) {
+    comfyServer.trustSelfSigned = value
+    persistComfySettings()
+}
+
+/** 落盘非敏感配置 (地址 / 认证方式 / 用户名 / 请求头 / 自签开关) */
+internal fun PaintViewModel.persistComfySettings() {
+    if (!hasAppContext()) return
+    val server = comfyServer
+    val headers = server.extraHeaders.filter { it.key.isNotBlank() }.map { it.key.trim() to it.value }
+    ComfyCredentialStore.save(
+        appContext,
+        ComfyServerConfig(
+            baseUrl = server.baseUrl.trim(),
+            authMode = server.authMode,
+            username = server.username,
+            extraHeaders = headers,
+            trustSelfSigned = server.trustSelfSigned,
+        ),
+    )
+}
+
+/**
+ * 测试连接。
+ *
+ * [passwordDraft] 是 UI 里刚输入的密码; 为空则回退到已加密保存的那份。
+ * 网络调用走 [Dispatchers.IO], **不挂渲染线程** (铁律 2), 也绝不设置 `isBlockingLoading`。
+ */
+internal fun PaintViewModel.testComfyConnection(passwordDraft: String = "") {
+    val server = comfyServer
+    persistComfySettings()
+
+    if (server.baseUrl.isBlank()) {
+        server.status = ComfyConnectionStatus.NOT_CONFIGURED
+        server.statusDetail = ""
+        server.lastAttemptUrl = ""
+        return
+    }
+
+    val normalized = ComfyUrl.normalize(server.baseUrl)
+    if (normalized is ComfyUrl.UrlResult.Invalid) {
+        server.status = ComfyConnectionStatus.INVALID_URL
+        server.statusDetail = normalized.reason
+        server.lastAttemptUrl = server.baseUrl.trim()
+        return
+    }
+    val base = (normalized as ComfyUrl.UrlResult.Ok).base
+
+    // Basic 模式下才有密码; 非 Basic 不发送任何 Basic 头
+    val effectivePassword =
+        when (server.authMode) {
+            ComfyAuthMode.BASIC ->
+                passwordDraft.ifBlank {
+                    if (hasAppContext()) ComfyCredentialStore.loadPassword(appContext) else ""
+                }
+            else -> ""
+        }
+    if (server.authMode == ComfyAuthMode.BASIC && passwordDraft.isNotEmpty() && hasAppContext()) {
+        ComfyCredentialStore.savePassword(appContext, passwordDraft)
+        server.hasSavedPassword = true
+    }
+
+    val creds =
+        ComfyCredentials(
+            baseUrl = base,
+            username = if (server.authMode == ComfyAuthMode.BASIC) server.username else null,
+            password = if (server.authMode == ComfyAuthMode.BASIC) effectivePassword.ifEmpty { null } else null,
+            extraHeaders =
+                if (server.authMode == ComfyAuthMode.CUSTOM_HEADER) {
+                    server.extraHeaders
+                        .filter { it.key.isNotBlank() }
+                        .associate { it.key.trim() to it.value }
+                } else {
+                    emptyMap()
+                },
+        )
+    val httpClient = SyncHttp.client(server.trustSelfSigned)
+
+    server.lastAttemptUrl = ComfyUrl.join(base, "system_stats")
+    server.status = ComfyConnectionStatus.TESTING
+    server.statusDetail = ""
+
+    viewModelScope.launch {
+        val result =
+            withContext(Dispatchers.IO) {
+                ComfyClient.create(creds, httpClient)?.probe()
+                    ?: ComfyCall.Fail(ComfyConnectionError.Unreachable, null)
+            }
+        // 期间用户可能又改了地址并重测, 丢弃这份过期结果
+        if (server.status != ComfyConnectionStatus.TESTING) return@launch
+        when (result) {
+            is ComfyCall.Ok -> {
+                server.status = ComfyConnectionStatus.CONNECTED
+                server.statusDetail = result.value
+            }
+            is ComfyCall.Fail -> {
+                when (val error = result.error) {
+                    ComfyConnectionError.AuthNotConfigured -> {
+                        server.status = ComfyConnectionStatus.AUTH_NOT_CONFIGURED
+                        server.statusDetail = ""
+                    }
+                    ComfyConnectionError.AuthFailed -> {
+                        server.status = ComfyConnectionStatus.AUTH_FAILED
+                        server.statusDetail = ""
+                    }
+                    ComfyConnectionError.Unreachable -> {
+                        server.status = ComfyConnectionStatus.UNREACHABLE
+                        server.statusDetail = result.detail ?: ""
+                    }
+                    is ComfyConnectionError.ServerError -> {
+                        server.status = ComfyConnectionStatus.SERVER_ERROR
+                        server.statusDetail = error.code.toString()
+                    }
+                }
+            }
+        }
+    }
 }
