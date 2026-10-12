@@ -32,6 +32,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -50,6 +52,7 @@ import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,9 +72,12 @@ import com.reverie.paint.core.closeComfyWorkflowDetail
 import com.reverie.paint.core.closeComfyWorkflowImport
 import com.reverie.paint.core.confirmDeleteComfyWorkflow
 import com.reverie.paint.core.copyOrCutSelection
+import com.reverie.paint.core.currentAiBindings
 import com.reverie.paint.core.dismissAi
 import com.reverie.paint.core.invertSelectionAction
+import com.reverie.paint.core.openComfyWorkflowDetail
 import com.reverie.paint.core.publishAiPanelBounds
+import com.reverie.paint.core.onAiPanelBecameVisible
 import com.reverie.paint.core.regenerateAi
 import com.reverie.paint.core.refreshAiSelectionBounds
 import com.reverie.paint.core.rerollAiSeed
@@ -120,8 +126,9 @@ fun AiGeneratePanel(
 
     // 面板把自己的包围盒报给画布 → 画布笔画不会落在面板上 (ISSUES.md P5)。
     // 隐藏时发 null 清掉避让, 否则面板走了笔画还在绕路。
+    // 可见时执行挂起的会话清理 (应用/放弃后不在关闭那一帧清, 见 AiUiState.sessionConsumed)。
     LaunchedEffect(visible) {
-        if (!visible) vm.publishAiPanelBounds(null)
+        if (visible) vm.onAiPanelBecameVisible() else vm.publishAiPanelBounds(null)
     }
 
     AnimatedVisibility(
@@ -238,6 +245,9 @@ private fun AiPanelIntent(
             )
         }
 
+        // ---- 行 2.5: 负面提示词 (折叠入口; 展开是多行输入) ----
+        AiNegativePromptField(vm = vm)
+
         // ---- 行 3: 参数 ↔ 进度 (FlowRow: 窄屏自动折行, 不引入横向滚动) ----
         FlowRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -268,8 +278,8 @@ private fun AiPanelIntent(
             }
         }
 
-        // ⚙ 抽屉: 藏起来的是复杂度, 不是能力 (原则 P7)。步数 / CFG / 种子都是真的接在
-        // 状态上 —— 改步数会当场改变形态 B 的进度总步数, 不是装饰。
+        // ⚙ 抽屉: 藏起来的是复杂度, 不是能力 (原则 P7)。步数 / CFG / 种子都走绑定注入,
+        // 已绑定才可调, 未绑定则禁用并给出「去绑定」入口 —— 不做不起作用的装饰控件。
         AnimatedVisibility(
             visible = ui.advancedOpen && !generating,
             enter = fadeIn(Motion.enterSpring()) + scaleIn(Motion.enterSpring(), initialScale = 0.96f),
@@ -459,6 +469,64 @@ private fun AiPromptField(
 }
 
 /**
+ * 负面提示词: 主体提示词框下方一行折叠入口, 展开后是多行输入。
+ *
+ * **空值是合法的** —— 留空即不注入 (工作流原值保留), 与正向提示词一样不设校验。
+ * 只有工作流绑定了负面提示词角色时, 提交才会写到对应节点。
+ */
+@Composable
+private fun AiNegativePromptField(vm: PaintViewModel) {
+    val ui = vm.aiUi
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        ToolFloatChip(
+            label =
+                stringResource(
+                    if (ui.negativePrompt.isNotBlank()) {
+                        R.string.ai_negative_capsule_set
+                    } else {
+                        R.string.ai_negative_capsule
+                    },
+                ),
+            selected = ui.negativeExpanded,
+            onClick = { ui.negativeExpanded = !ui.negativeExpanded },
+        )
+        AnimatedVisibility(
+            visible = ui.negativeExpanded,
+            enter = fadeIn(Motion.enterSpring()) + scaleIn(Motion.enterSpring(), initialScale = 0.96f),
+            exit = fadeOut(Motion.exitTween(120)) + scaleOut(Motion.exitTween(120), targetScale = 0.96f),
+        ) {
+            OutlinedTextField(
+                value = ui.negativePrompt,
+                onValueChange = { ui.negativePrompt = it },
+                placeholder = {
+                    Text(
+                        text = stringResource(R.string.ai_negative_placeholder),
+                        fontSize = 12.sp,
+                        color = Morandi.subText.copy(alpha = 0.7f),
+                    )
+                },
+                textStyle = TextStyle(fontSize = 12.sp, color = Morandi.text),
+                minLines = 2,
+                maxLines = 4,
+                shape = RoundedCornerShape(10.dp),
+                colors =
+                    OutlinedTextFieldDefaults.colors(
+                        focusedContainerColor = Morandi.panelHi,
+                        unfocusedContainerColor = Morandi.panelHi,
+                        // Morandi.border 是 Transparent: 未聚焦时不画描边, 层级靠明度差
+                        focusedBorderColor = Morandi.accent,
+                        unfocusedBorderColor = Color.Transparent,
+                        cursorColor = Morandi.accent,
+                        focusedTextColor = Morandi.text,
+                        unfocusedTextColor = Morandi.text,
+                    ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/**
  * 主按钮。
  *
  * 文案来自 [com.reverie.paint.core.comfy.AiButtonResolver], 这里只负责把它变成一个按钮。
@@ -620,8 +688,9 @@ private fun AiStrengthCapsule(
 /**
  * ⚙ 抽屉 (生成参数)。
  *
- * 只放三个**真的接在状态上**的参数, 其余复杂度 (采样器 / 调度器 / VAE / LoRA / 分块)
- * 一律不暴露 —— 用户想调就新建一个预设 (原则 P7)。
+ * 步数 / CFG / 种子都是**走绑定的真实参数**: 工作流绑定了对应字段才允许调整, 调整随提交
+ * 写进工作流; **未绑定就禁用**并给出说明与「去绑定」入口 —— 绝不让用户对着一个不起作用的
+ * 控件调半天。其余复杂度 (采样器 / 调度器 / VAE / LoRA / 分块) 一律不暴露 (原则 P7)。
  *
  * 视觉上比外面深一级 ([Morandi.panelHi]) 而不是加一圈描边: `Morandi.border` 是 Transparent,
  * 层级一律靠明度差。
@@ -632,6 +701,14 @@ private fun AiAdvancedDrawer(
     modifier: Modifier = Modifier,
 ) {
     val ui = vm.aiUi
+    val bindings = vm.currentAiBindings()
+    val currentWorkflow = vm.comfyWorkflows.current
+    val onBind: (() -> Unit)? =
+        if (currentWorkflow != null) {
+            { vm.openComfyWorkflowDetail(currentWorkflow) }
+        } else {
+            null
+        }
     var pendingSteps by remember(ui.steps) { mutableFloatStateOf(-1f) }
     var pendingCfg by remember(ui.cfg) { mutableFloatStateOf(-1f) }
 
@@ -662,65 +739,148 @@ private fun AiAdvancedDrawer(
                 onClick = { ui.advancedOpen = !ui.advancedOpen },
             )
         }
-        ToolFloatSlider(
-            label = stringResource(R.string.ai_param_steps),
-            valueText = ui.steps.toString(),
-            range = 8f..50f,
-            value = if (pendingSteps >= 0f) pendingSteps else ui.steps.toFloat(),
-            onValue = { pendingSteps = it },
-            onRelease = {
-                if (pendingSteps >= 0f) {
-                    ui.steps = pendingSteps.toInt().coerceIn(8, 50)
-                    pendingSteps = -1f
+        if (bindings?.steps != null) {
+            ToolFloatSlider(
+                label = stringResource(R.string.ai_param_steps),
+                valueText = ui.steps.toString(),
+                range = 8f..50f,
+                value = if (pendingSteps >= 0f) pendingSteps else ui.steps.toFloat(),
+                onValue = { pendingSteps = it },
+                onRelease = {
+                    if (pendingSteps >= 0f) {
+                        ui.steps = pendingSteps.toInt().coerceIn(8, 50)
+                        pendingSteps = -1f
+                    }
+                },
+                labelWidth = 44.dp,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            AiUnboundParam(
+                label = stringResource(R.string.ai_param_steps),
+                value = ui.steps.toString(),
+                hint = stringResource(R.string.ai_param_steps_unbound),
+                onBind = onBind,
+            )
+        }
+        if (bindings?.cfg != null) {
+            ToolFloatSlider(
+                label = stringResource(R.string.ai_param_cfg),
+                valueText = ui.cfg.roundToInt().toString(),
+                range = 1f..14f,
+                value = if (pendingCfg >= 0f) pendingCfg else ui.cfg,
+                onValue = { pendingCfg = it },
+                onRelease = {
+                    if (pendingCfg >= 0f) {
+                        ui.cfg = pendingCfg.coerceIn(1f, 14f)
+                        pendingCfg = -1f
+                    }
+                },
+                labelWidth = 44.dp,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            AiUnboundParam(
+                label = stringResource(R.string.ai_param_cfg),
+                value = ui.cfg.roundToInt().toString(),
+                hint = stringResource(R.string.ai_param_cfg_unbound),
+                onBind = onBind,
+            )
+        }
+        if (bindings?.seed != null) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.ai_param_seed),
+                    fontSize = 12.sp,
+                    color = Morandi.subText,
+                )
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(5.dp))
+                        .background(Morandi.bg.copy(alpha = 0.6f))
+                        .padding(horizontal = 7.dp, vertical = 3.dp),
+                ) {
+                    Text(
+                        text = ui.seed.toString(),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = Morandi.text,
+                    )
                 }
-            },
-            labelWidth = 44.dp,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        ToolFloatSlider(
-            label = stringResource(R.string.ai_param_cfg),
-            valueText = ui.cfg.roundToInt().toString(),
-            range = 1f..14f,
-            value = if (pendingCfg >= 0f) pendingCfg else ui.cfg,
-            onValue = { pendingCfg = it },
-            onRelease = {
-                if (pendingCfg >= 0f) {
-                    ui.cfg = pendingCfg.coerceIn(1f, 14f)
-                    pendingCfg = -1f
-                }
-            },
-            labelWidth = 44.dp,
-            modifier = Modifier.fillMaxWidth(),
-        )
+                Spacer(Modifier.weight(1f))
+                ToolFloatChip(
+                    label = stringResource(R.string.ai_action_random_seed),
+                    onClick = { vm.rerollAiSeed() },
+                )
+            }
+        } else {
+            AiUnboundParam(
+                label = stringResource(R.string.ai_param_seed),
+                value = ui.seed.toString(),
+                hint = stringResource(R.string.ai_param_seed_unbound),
+                onBind = onBind,
+            )
+        }
+        AiServerEntry(vm = vm)
+    }
+}
+
+/**
+ * 未绑定的参数行: 展示当前值 (弱化, 表示"暂时不生效") + 说明 + 「去绑定」入口。
+ *
+ * 这是"未绑定就禁用"的落地形态 —— 与其给一个灰掉的滑杆, 不如直说为什么调不了、去哪里绑。
+ */
+@Composable
+private fun AiUnboundParam(
+    label: String,
+    value: String,
+    hint: String,
+    onBind: (() -> Unit)?,
+) {
+    Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth(),
         ) {
             Text(
-                text = stringResource(R.string.ai_param_seed),
+                text = label,
+                color = Morandi.subText.copy(alpha = 0.5f),
                 fontSize = 12.sp,
-                color = Morandi.subText,
+                maxLines = 1,
+                modifier = Modifier.widthIn(min = 44.dp),
             )
             Box(
                 modifier = Modifier
                     .clip(RoundedCornerShape(5.dp))
-                    .background(Morandi.bg.copy(alpha = 0.6f))
+                    .background(Morandi.bg.copy(alpha = 0.35f))
                     .padding(horizontal = 7.dp, vertical = 3.dp),
             ) {
                 Text(
-                    text = ui.seed.toString(),
+                    text = value,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Medium,
-                    color = Morandi.text,
+                    color = Morandi.subText.copy(alpha = 0.6f),
                 )
             }
             Spacer(Modifier.weight(1f))
-            ToolFloatChip(
-                label = stringResource(R.string.ai_action_random_seed),
-                onClick = { vm.rerollAiSeed() },
-            )
+            if (onBind != null) {
+                ToolFloatChip(
+                    label = stringResource(R.string.ai_param_bind_now),
+                    onClick = onBind,
+                )
+            }
         }
-        AiServerEntry(vm = vm)
+        Text(
+            text = hint,
+            fontSize = 10.sp,
+            color = Morandi.subText,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

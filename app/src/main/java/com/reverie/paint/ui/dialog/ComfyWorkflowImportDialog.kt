@@ -109,24 +109,14 @@ fun ComfyWorkflowImportDialog(
 
     fun applyPick(index: Int, role: BindRole, nodeId: String, fieldName: String?) {
         val preview = (entries.getOrNull(index)?.parse as? ComfyImportParse.Ok)?.preview ?: return
-        val next =
-            when (role) {
-                BindRole.PROMPT -> preview.bindings.withRole(role, nodeId, fieldName)
-                BindRole.NEGATIVE -> preview.bindings.withRole(role, nodeId, fieldName)
-                BindRole.IMAGE -> preview.bindings.withRole(role, nodeId, fieldName)
-                BindRole.OUTPUT -> preview.bindings.copy(outputNodeId = nodeId)
-            }
+        val next = preview.bindings.withRole(role, nodeId, fieldName)
         updateEntry(index, preview.copy(bindings = next, manual = !next.sameRolesAs(preview.auto)))
     }
 
     fun applyClear(index: Int, role: BindRole) {
+        if (!role.isClearable()) return
         val preview = (entries.getOrNull(index)?.parse as? ComfyImportParse.Ok)?.preview ?: return
-        val next =
-            when (role) {
-                BindRole.IMAGE -> preview.bindings.copy(image = null)
-                BindRole.NEGATIVE -> preview.bindings.copy(negative = null)
-                else -> return
-            }
+        val next = preview.bindings.clearRole(role)
         updateEntry(index, preview.copy(bindings = next, manual = !next.sameRolesAs(preview.auto)))
     }
 
@@ -415,7 +405,7 @@ fun ComfyWorkflowImportDialog(
             ComfyNodePickerDialog(
                 nodes = preview.nodes,
                 role = target.role,
-                allowClear = target.role == BindRole.IMAGE || target.role == BindRole.NEGATIVE,
+                allowClear = target.role.isClearable(),
                 onPick = { nodeId, field ->
                     applyPick(target.entryIndex, target.role, nodeId, field)
                     pickTarget = null

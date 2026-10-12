@@ -74,6 +74,15 @@ internal class AiUiState {
     /** 提示词。**空串是一等公民输入** (原则 P10: 留空 = 照周边续写), 所以不做非空校验 */
     var prompt by mutableStateOf("")
 
+    /**
+     * 负面提示词。**空串是合法的** —— 与提示词一样不做校验, 留空即不注入 (保持模板原值)。
+     * 只有工作流绑定了负面提示词角色时才写进工作流。
+     */
+    var negativePrompt by mutableStateOf("")
+
+    /** 负面提示词输入是否展开 (默认收起, 只露一行折叠入口) */
+    var negativeExpanded by mutableStateOf(false)
+
     /** 生成方式 (画家词汇, 不是模型词汇 —— 原则 P6) */
     var mode by mutableStateOf(AiGenerateMode.FILL)
 
@@ -95,13 +104,19 @@ internal class AiUiState {
 
     var advancedOpen by mutableStateOf(false)
 
-    /** 采样步数。真实存在的参数, 一期只喂假驱动 (进度条总步数跟着它变) */
+    /**
+     * 采样步数。**走绑定注入** —— 只有当前工作流绑定了 steps 字段时, 面板滑块才可用,
+     * 调整即随提交写进工作流; 未绑定时禁用 (见 `AiGeneratePanel`)。
+     * 生成中它同时是假进度条的总步数来源。
+     */
     var steps by mutableIntStateOf(AI_DEFAULT_STEPS)
 
-    /** 提示词引导强度 */
+    /**
+     * 提示词引导强度。**走绑定注入**, 与步数同样的可用性规则: 未绑定即禁用。
+     */
     var cfg by mutableFloatStateOf(7.0f)
 
-    /** 种子。「每次生成换种子」一期不做, 只给一个能点的换种子 */
+    /** 种子。**走 SEED 角色绑定注入**, 未绑定时「换种子」禁用 */
     var seed by mutableLongStateOf(104729L)
 
     // ---- 形态 A: 选区信息 (由选区蒙版异步算出, 见 [refreshAiSelectionBounds]) ----
@@ -141,9 +156,27 @@ internal class AiUiState {
     @Volatile
     var panelBounds: RectF? = null
 
-    /** 会话是否非空 (形态 B/C)。面板的可见条件之一, 见 [aiPanelVisible] */
-    val sessionActive: Boolean
-        get() = form != AiPanelForm.READY || variants.isNotEmpty()
+    /**
+     * 面板是否应当保持打开。
+     *
+     * **不能靠会话状态派生可见性**: 提交后会自动切回笔刷工具 (此时 `tool != AI_IMAGE`),
+     * 若此时取消生成, 表单回到 [AiPanelForm.READY] 且没有变体, 派生出来的"会话非空"
+     * 会立刻变 false, **整个面板被藏起来** —— 用户点了取消却像是关掉了对话框。
+     *
+     * 面板只在两种情况下关闭: 用户点 [×] (见 [dismissAi]) 或结果已应用
+     * (见 [applyAiResult])。取消生成只是退出生成态, 面板留着让用户接着改提示词重试。
+     */
+    var panelOpen by mutableStateOf(false)
+
+    /**
+     * 会话数据已被应用/放弃, 但**要等面板退出动画结束再清**。
+     *
+     * 若在关闭的同一帧就把 `form` 清成 READY、把变体清空, `AnimatedVisibility` 的
+     * 退场动画会在变体带淡出的同时渲染成"就绪态输入区" —— 用户看到的是
+     * "先退回上一个界面, 再关闭", 很别扭。所以这里只做一个待清理标记,
+     * 真正的清理由 [onAiPanelBecameVisible] 在面板下次可见时执行。
+     */
+    var sessionConsumed by mutableStateOf(false)
 
     /** 一批的总步数 (面板的 `第 N/M 步` 要读它, 不能在 UI 侧写死) */
     val totalSteps: Int get() = steps.coerceAtLeast(1)
@@ -164,9 +197,9 @@ internal fun PaintViewModel.aiButtonLabel(): AiButtonLabel =
         ),
     )
 
-/** 面板是否该浮出来: 选了 AI 工具, 或有进行中的会话 (入口 E1 / E2 / E3 三条路) */
+/** 面板是否该浮出来: 选了 AI 工具, 或用户主动打开过 (入口 E1 / E2 / E3 三条路) */
 internal fun PaintViewModel.aiPanelVisible(tool: Tool): Boolean =
-    tool == Tool.AI_IMAGE || aiUi.sessionActive
+    tool == Tool.AI_IMAGE || aiUi.panelOpen
 
 // ---------------------------------------------------------------------------
 // 形态切换
@@ -180,29 +213,51 @@ internal fun PaintViewModel.aiPanelVisible(tool: Tool): Boolean =
  */
 internal fun PaintViewModel.submitAiGeneration() {
     val ui = aiUi
-    if (ui.form == AiPanelForm.READY) {
-        ui.form = AiPanelForm.GENERATING
-        ui.runningStep = 0
-        ui.queuedCount = 0
-    } else {
+    ui.panelOpen = true
+    // 判断依据是"驱动是否在跑", 不是 form —— 后者在形态切换的瞬间可能与真实状态不一致
+    if (ui.driverJob?.isActive == true) {
+        // 已有任务在跑: 这一批排队 (不做并发限制, 连按就是排多个)
         ui.queuedCount += 1
+    } else {
+        // 空闲: 这一批是第一个, 清零排队数, 否则驱动会多跑一批
+        ui.queuedCount = 0
+        ui.runningStep = 0
+        ui.form = AiPanelForm.GENERATING
     }
     ensureAiQueueDriver()
     // 提交后立刻把工具还给画笔 (P1-21: 画布立刻可画)。
-    // 面板不消失 —— 它靠"会话进行中"继续挂着, 这正是非模态的形态 (原则 P4)。
+    // 面板不消失 —— 靠 [aiUi.panelOpen] 继续挂着, 这正是非模态的形态 (原则 P4)。
     if (currentToolId == Tool.AI_IMAGE.id) applyTool(Tool.BRUSH.id)
 }
 
-/** ⟳ 再生成: 同提示词同参数换一批。旧的变体组保留, 可以回头翻 */
+/** ⟳ 再生成: 同提示词同参数换一批 */
 internal fun PaintViewModel.regenerateAi() {
     val ui = aiUi
-    ui.queuedCount += 1
-    ui.form = AiPanelForm.GENERATING
+    ui.panelOpen = true
+    if (ui.driverJob?.isActive == true) {
+        // 已有任务在跑: 这一批排到它后面
+        ui.queuedCount += 1
+        return
+    }
+    // 空闲态 (形态 C 点再生成走这里): 这一批就是第一个。
+    // **必须清零排队数** —— 上一批跑完后 queuedCount 已归零, 但若这里再去 +1,
+    // 驱动循环跑完一批会看到"队列里还有 1 个"而多跑一批, 用户看到的就是
+    // "正在生成 1 个 + 排队 1 个 = 2 个"。
+    ui.queuedCount = 0
     ui.runningStep = 0
+    ui.form = AiPanelForm.GENERATING
     ensureAiQueueDriver()
 }
 
-/** 取消正在跑的任务。已有变体就退回形态 C, 否则退回形态 A */
+/**
+ * 取消正在跑的任务。
+ *
+ * **只退出生成态, 不关面板** —— 面板留着让用户接着改提示词重试。
+ * 已有变体就退回形态 C, 否则退回形态 A, 两种都保持 [AiUiState.panelOpen] 不变。
+ *
+ * TODO(生成链路): 接上真实请求后, 这里还要 `POST /interrupt` 让 ComfyUI 停掉远端任务。
+ * 现在生成是假驱动 (ISSUES.md P12), 取消本地协程就够了。
+ */
 internal fun PaintViewModel.cancelAiGeneration() {
     val ui = aiUi
     ui.driverJob?.cancel()
@@ -210,6 +265,7 @@ internal fun PaintViewModel.cancelAiGeneration() {
     ui.queuedCount = 0
     ui.runningStep = 0
     ui.form = if (ui.variants.isNotEmpty()) AiPanelForm.RESULT else AiPanelForm.READY
+    // 注意: 这里**不要**动 panelOpen。取消 ≠ 关闭。
 }
 
 /** 换一颗种子。种子是唯一值得"手动碰"的隐藏参数 —— 它决定"再生成"能不能真的换出东西 */
@@ -222,23 +278,38 @@ internal fun PaintViewModel.dismissAi() {
     val ui = aiUi
     ui.driverJob?.cancel()
     ui.driverJob = null
-    ui.form = AiPanelForm.READY
     ui.queuedCount = 0
     ui.runningStep = 0
-    ui.variants.clear()
-    ui.selectedVariant = 0
+    // 只标记待清理, 不在这一帧改 form / 清变体 —— 否则退场动画会闪出就绪态 (见 sessionConsumed)
+    ui.sessionConsumed = true
+    ui.panelOpen = false
     if (currentToolId == Tool.AI_IMAGE.id) applyTool(Tool.BRUSH.id)
 }
 
 /** ✓ 应用: 形态 C 收工 (真实图层新增是 S2 的事, 一期先走通交互) */
 internal fun PaintViewModel.applyAiResult() {
     val ui = aiUi
-    ui.variants.clear()
-    ui.selectedVariant = 0
-    ui.form = AiPanelForm.READY
     ui.driverJob?.cancel()
     ui.driverJob = null
+    // 同上: 直接淡出, 内容保持变体带, 不要"先退回就绪态再关闭"
+    ui.sessionConsumed = true
+    ui.panelOpen = false
     applyTool(Tool.BRUSH.id)
+}
+
+/**
+ * 面板刚从不可见变为可见时调用 (由 [com.reverie.paint.ui.painting.panels.AiGeneratePanel] 的
+ * `LaunchedEffect(visible)` 触发)。执行 [AiUiState.sessionConsumed] 挂起的清理。
+ */
+internal fun PaintViewModel.onAiPanelBecameVisible() {
+    val ui = aiUi
+    if (!ui.sessionConsumed) return
+    ui.sessionConsumed = false
+    ui.form = AiPanelForm.READY
+    ui.queuedCount = 0
+    ui.runningStep = 0
+    ui.variants.clear()
+    ui.selectedVariant = 0
 }
 
 // ---------------------------------------------------------------------------

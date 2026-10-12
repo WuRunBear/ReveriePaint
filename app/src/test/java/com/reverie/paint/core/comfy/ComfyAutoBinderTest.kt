@@ -100,6 +100,75 @@ class ComfyAutoBinderTest {
     }
 
     @Test
+    fun `standard txt2img binds sampler steps cfg and seed`() {
+        val r = bind(standardTxt2img)
+        assertEquals(ComfyBinding("3", "steps"), r.steps)
+        assertEquals(ComfyBinding("3", "cfg"), r.cfg)
+        assertEquals(ComfyBinding("3", "seed"), r.seed)
+    }
+
+    @Test
+    fun `binding set and editable carry steps cfg and seed`() {
+        val r = bind(standardTxt2img)
+        val set = r.bindingSet()!!
+        assertEquals(ComfyBinding("3", "steps"), set.steps)
+        assertEquals(ComfyBinding("3", "cfg"), set.cfg)
+        assertEquals(ComfyBinding("3", "seed"), set.seed)
+        assertEquals(set, r.toEditable().toBindingSet())
+    }
+
+    @Test
+    fun `missing sampler fields are reported instead of silently skipped`() {
+        val json = """
+            {
+              "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "p"}},
+              "2": {"class_type": "KSampler", "inputs": {"denoise": 1, "positive": ["1", 0]}},
+              "3": {"class_type": "SaveImage", "inputs": {"images": ["2", 0]}}
+            }
+        """.trimIndent()
+        val r = bind(json)
+        assertNull(r.steps)
+        assertNull(r.cfg)
+        assertNull(r.seed)
+        assertTrue(r.has(BindNoteKey.STEPS_FIELD_MISSING))
+        assertTrue(r.has(BindNoteKey.CFG_FIELD_MISSING))
+        assertTrue(r.has(BindNoteKey.SEED_FIELD_MISSING))
+    }
+
+    @Test
+    fun `KSamplerAdvanced noise_seed is recognised as the seed slot`() {
+        val json = """
+            {
+              "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "p"}},
+              "2": {"class_type": "KSamplerAdvanced", "inputs": {"add_noise": "enable", "steps": 20,
+                       "cfg": 7, "noise_seed": 42, "positive": ["1", 0]}},
+              "3": {"class_type": "SaveImage", "inputs": {"images": ["2", 0]}}
+            }
+        """.trimIndent()
+        val r = bind(json)
+        assertEquals(ComfyBinding("2", "steps"), r.steps)
+        assertEquals(ComfyBinding("2", "cfg"), r.cfg)
+        assertEquals(ComfyBinding("2", "noise_seed"), r.seed)
+    }
+
+    @Test
+    fun `a linked seed is not a writable slot and is reported`() {
+        val json = """
+            {
+              "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "p"}},
+              "2": {"class_type": "RandomNoise", "inputs": {"noise_seed": 1}},
+              "3": {"class_type": "KSampler", "inputs": {"denoise": 1, "steps": 20, "cfg": 7,
+                       "seed": ["2", 0], "positive": ["1", 0]}},
+              "4": {"class_type": "SaveImage", "inputs": {"images": ["3", 0]}}
+            }
+        """.trimIndent()
+        val r = bind(json)
+        assertNull(r.seed)
+        assertTrue(r.has(BindNoteKey.SEED_FIELD_MISSING))
+        assertEquals(ComfyBinding("3", "steps"), r.steps)
+    }
+
+    @Test
     fun `hasReference does not disturb a workflow that has no image input`() {
         val r = bind(standardTxt2img, hasReference = true)
         assertTrue(r.has(BindNoteKey.REFERENCE_WITHOUT_IMAGE_INPUT))

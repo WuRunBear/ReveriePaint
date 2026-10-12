@@ -14,6 +14,7 @@ import com.reverie.paint.core.comfy.AiBindingSet
 import com.reverie.paint.core.comfy.BindNote
 import com.reverie.paint.core.comfy.ComfyAutoBinder
 import com.reverie.paint.core.comfy.ComfyNode
+import com.reverie.paint.core.comfy.ComfyParamDefaultsReader
 import com.reverie.paint.core.comfy.ComfyWorkflowParser
 import com.reverie.paint.core.comfy.ComfyWorkflowStore
 import com.reverie.paint.core.comfy.ComfyWorkflowType
@@ -24,6 +25,7 @@ import com.reverie.paint.core.comfy.toEditable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 import java.util.UUID
 
 /**
@@ -46,6 +48,15 @@ internal class ComfyWorkflowState {
 
     /** 正在查看/编辑绑定的工作流 (非 null 时弹详情对话框) */
     var detailTarget by mutableStateOf<StoredWorkflow?>(null)
+
+    /**
+     * 上一次同步面板采样默认值时的工作流签名 (id + STEPS/CFG/SEED 绑定)。
+     *
+     * 用来保证「从工作流取默认值」**只在当前工作流真正变化时发生**: 同 id 同绑定的重复
+     * 重载 (导入别的工作流 / 保存绑定) 不会再把用户手动调过的步数冲掉。
+     * 不是 UI 状态, 不用 `mutableStateOf`, 免得白白触发重组。
+     */
+    var syncedParamsKey: String? = null
 
     val current: StoredWorkflow? get() = workflows.firstOrNull { it.id == currentId }
 }
@@ -126,6 +137,48 @@ internal fun PaintViewModel.loadComfyWorkflows() {
     val resolved = persisted?.takeIf { id -> stored.any { it.id == id } } ?: stored.firstOrNull()?.id
     state.currentId = resolved
     if (resolved != persisted) ComfyWorkflowStore.setCurrent(appContext, resolved)
+    // 当前工作流可能变了 (启动 / 导入后自动选中 / 删除后回退): 同步一次面板采样默认值
+    syncAiParamsFromCurrentWorkflow()
+}
+
+/**
+ * 以当前工作流 STEPS / CFG / SEED 绑定字段的**实际值**刷新面板默认值。
+ *
+ * 只在「当前工作流发生变化」时调用 —— 启动加载当前工作流、用户切换工作流、增删工作流后重载。
+ * **绝不能放进 Compose 重组**: 每次重组都覆盖会把用户手动调过的参数冲掉。
+ *
+ * 规则:
+ * - 未绑定 / 读不到的角色不写 ([ComfyParamDefaultsReader] 返回 null), 面板保持原值且控件仍禁用
+ * - 读到的值由 [ComfyParamDefaultsReader] 做合法性钳制, 怪值不会把滑块搞崩
+ * - 读文件 + 解析 JSON 走 [Dispatchers.IO], 不挂渲染线程
+ */
+internal fun PaintViewModel.syncAiParamsFromCurrentWorkflow() {
+    val state = comfyWorkflows
+    val id = state.currentId
+    if (id == null) {
+        state.syncedParamsKey = null
+        return
+    }
+    if (!hasAppContext()) return
+    val bindings = state.current?.binding
+    val key = "$id|${bindings?.steps}|${bindings?.cfg}|${bindings?.seed}"
+    if (key == state.syncedParamsKey) return
+    state.syncedParamsKey = key
+
+    val ui = aiUi
+    viewModelScope.launch {
+        val raw =
+            withContext(Dispatchers.IO) {
+                runCatching { ComfyWorkflowStore.readJson(appContext, id)?.let { JSONObject(it) } }.getOrNull()
+            }
+        if (raw == null) return@launch
+        // 期间用户可能又切了工作流, 丢弃这份过期结果
+        if (state.currentId != id) return@launch
+        val defaults = ComfyParamDefaultsReader.read(raw, bindings)
+        defaults.steps?.let { ui.steps = it }
+        defaults.cfg?.let { ui.cfg = it }
+        defaults.seed?.let { ui.seed = it }
+    }
 }
 
 /**
@@ -222,6 +275,8 @@ internal fun PaintViewModel.deleteComfyWorkflow(id: String) {
 /** 切换当前工作流 */
 internal fun PaintViewModel.selectComfyWorkflow(id: String) {
     comfyWorkflows.currentId = id
+    // 换工作流 → 采样参数默认值跟着换 (key 不同才会真同步)
+    syncAiParamsFromCurrentWorkflow()
     if (!hasAppContext()) return
     viewModelScope.launch {
         withContext(Dispatchers.IO) { ComfyWorkflowStore.setCurrent(appContext, id) }
@@ -256,7 +311,7 @@ internal fun PaintViewModel.confirmDeleteComfyWorkflow() {
 // 节点绑定详情 (手动覆盖自动识别)
 // ---------------------------------------------------------------------------
 
-/** 打开某份工作流的绑定详情 (可在里面手动改四个角色) */
+/** 打开某份工作流的绑定详情 (可在里面手动改各角色) */
 internal fun PaintViewModel.openComfyWorkflowDetail(workflow: StoredWorkflow) {
     comfyWorkflows.detailTarget = workflow
 }
@@ -264,6 +319,14 @@ internal fun PaintViewModel.openComfyWorkflowDetail(workflow: StoredWorkflow) {
 internal fun PaintViewModel.closeComfyWorkflowDetail() {
     comfyWorkflows.detailTarget = null
 }
+
+/**
+ * 当前工作流的落盘绑定; 没有工作流或绑定不可用时返回 null。
+ *
+ * 面板用它判断步数 / CFG / 种子滑块是否已绑定 —— **未绑定就禁用**, 绝不留给用户
+ * 一个调了不生效的控件 (COMFYUI-DESIGN 的"隐藏复杂性, 不隐藏能力")。
+ */
+internal fun PaintViewModel.currentAiBindings(): AiBindingSet? = comfyWorkflows.current?.binding
 
 /**
  * 详情编辑器加载: 重解析原始 JSON 拿到节点表, 并重算一次自动绑定。

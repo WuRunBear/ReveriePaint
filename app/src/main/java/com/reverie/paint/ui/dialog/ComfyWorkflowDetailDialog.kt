@@ -160,16 +160,10 @@ internal fun ComfyWorkflowDetailDialog(
         ComfyNodePickerDialog(
             nodes = e.nodes,
             role = pickRole,
-            allowClear = pickRole == BindRole.IMAGE || pickRole == BindRole.NEGATIVE,
+            allowClear = pickRole.isClearable(),
             onPick = { nodeId, field -> commit(bindings!!.withRole(pickRole, nodeId, field)); picking = null },
             onClear = {
-                val next =
-                    if (pickRole == BindRole.IMAGE) {
-                        bindings!!.copy(image = null)
-                    } else {
-                        bindings!!.copy(negative = null)
-                    }
-                commit(next)
+                commit(bindings!!.clearRole(pickRole))
                 picking = null
             },
             onDismiss = { picking = null },

@@ -19,8 +19,12 @@ internal enum class WorkflowKind { TXT2IMG, IMG2IMG, INPAINT, UNKNOWN }
  * @property workflowKind 形态判定
  * @property unresolved 没识别出来的部分的**语义标记** (文案由 UI 层翻译)
  * @property denoise 改动幅度落到哪个字段。**纯文生图为 null** (txt2img 没有 denoise 语义)
+ * @property steps 采样步数落到哪个字段, null 表示没识别到
+ * @property cfg 引导强度落到哪个字段, null 表示没识别到
+ * @property seed 随机种子落到哪个字段 (KSampler 的 `seed` / KSamplerAdvanced 的 `noise_seed`),
+ *   null 表示没识别到
  * @property maskNodeId 第二个图像输入节点 (蒙版), null 表示该预设不支持蒙版类模式
- * @property samplerNodeId 采样器节点 id, 用于写 seed
+ * @property samplerNodeId 采样器节点 id
  */
 internal data class AutoBindResult(
     val prompt: ComfyBinding?,
@@ -30,6 +34,9 @@ internal data class AutoBindResult(
     val workflowKind: WorkflowKind,
     val unresolved: List<BindNote> = emptyList(),
     val denoise: ComfyBinding? = null,
+    val steps: ComfyBinding? = null,
+    val cfg: ComfyBinding? = null,
+    val seed: ComfyBinding? = null,
     val maskNodeId: String? = null,
     val samplerNodeId: String? = null,
 ) {
@@ -43,18 +50,24 @@ internal data class AutoBindResult(
         return AiBindingSet(
             base = ComfyBindings(prompt = p, image = imageInput, outputNodeId = out),
             negative = negativePrompt,
+            steps = steps,
+            cfg = cfg,
+            seed = seed,
             denoise = denoise,
             maskNodeId = maskNodeId,
             samplerNodeId = samplerNodeId,
         )
     }
 
-    /** 转成可编辑绑定 (四个角色取自动结果, 辅助绑定原样带过) */
+    /** 转成可编辑绑定 (各角色取自动结果, 辅助绑定原样带过) */
     fun toEditable(): EditableBindings = EditableBindings(
         prompt = prompt,
         negative = negativePrompt,
         image = imageInput,
         outputNodeId = outputNodeId,
+        steps = steps,
+        cfg = cfg,
+        seed = seed,
         denoise = denoise,
         maskNodeId = maskNodeId,
         samplerNodeId = samplerNodeId,
@@ -67,6 +80,9 @@ internal fun AiBindingSet.toEditable(): EditableBindings = EditableBindings(
     negative = negative,
     image = base.image,
     outputNodeId = base.outputNodeId,
+    steps = steps,
+    cfg = cfg,
+    seed = seed,
     denoise = denoise,
     maskNodeId = maskNodeId,
     samplerNodeId = samplerNodeId,
@@ -81,6 +97,9 @@ internal fun AiBindingSet.toEditable(): EditableBindings = EditableBindings(
 internal data class AiBindingSet(
     val base: ComfyBindings,
     val negative: ComfyBinding? = null,
+    val steps: ComfyBinding? = null,
+    val cfg: ComfyBinding? = null,
+    val seed: ComfyBinding? = null,
     val denoise: ComfyBinding? = null,
     val maskNodeId: String? = null,
     val samplerNodeId: String? = null,
@@ -116,6 +135,11 @@ internal object ComfyAutoBinder {
     private const val FIELD_DENOISE = "denoise"
     private const val FIELD_IMAGES = "images"
     private const val FIELD_MASK = "mask"
+    private const val FIELD_STEPS = "steps"
+    private const val FIELD_CFG = "cfg"
+
+    /** 种子的字段名: KSampler 用 `seed`, KSamplerAdvanced 用 `noise_seed` */
+    private val SEED_FIELDS = listOf("seed", "noise_seed")
 
     private const val CLASS_SAVE_IMAGE = "SaveImage"
     private const val CLASS_PREVIEW_IMAGE = "PreviewImage"
@@ -207,6 +231,11 @@ internal object ComfyAutoBinder {
             ?.takeIf { kind != WorkflowKind.TXT2IMG && FIELD_DENOISE in it.inputNames }
             ?.let { ComfyBinding(nodeId = it.id, fieldName = FIELD_DENOISE) }
 
+        // ---- ⑦ 采样参数落点: steps / cfg / seed 从采样器字段识别, 缺一个就如实进 unresolved ----
+        val steps = samplerFieldBinding(sampler, samplerInputs, listOf(FIELD_STEPS), BindNoteKey.STEPS_FIELD_MISSING, notes)
+        val cfg = samplerFieldBinding(sampler, samplerInputs, listOf(FIELD_CFG), BindNoteKey.CFG_FIELD_MISSING, notes)
+        val seed = samplerFieldBinding(sampler, samplerInputs, SEED_FIELDS, BindNoteKey.SEED_FIELD_MISSING, notes)
+
         return AutoBindResult(
             prompt = prompts.prompt,
             negativePrompt = prompts.negative,
@@ -215,6 +244,9 @@ internal object ComfyAutoBinder {
             workflowKind = kind,
             unresolved = notes,
             denoise = denoise,
+            steps = steps,
+            cfg = cfg,
+            seed = seed,
             maskNodeId = maskNode?.id,
             samplerNodeId = sampler?.id,
         )
@@ -355,6 +387,38 @@ internal object ComfyAutoBinder {
             is String -> value.trim().toDoubleOrNull()
             else -> null
         }
+
+    /**
+     * 采样器某个数值字段的绑定。
+     *
+     * 只在字段存在且是**字面量数值**时绑定 —— 字段是从别的节点连线过来的 (如 seed 来自
+     * 随机数节点) 时不能当可写落点, 否则注入会把连线覆盖掉。识别不到 (无采样器 / 无该字段 /
+     * 不是字面量) 时如实记一条 unresolved, **不静默略过**。
+     */
+    private fun samplerFieldBinding(
+        sampler: ComfyNode?,
+        inputs: JSONObject?,
+        fields: List<String>,
+        missingKey: BindNoteKey,
+        notes: MutableList<BindNote>,
+    ): ComfyBinding? {
+        if (sampler == null) return null
+        val field = fields.firstOrNull { literalNumber(inputs, it) }
+            ?: run {
+                notes += BindNote(missingKey, listOf(sampler.id))
+                return null
+            }
+        return ComfyBinding(sampler.id, field)
+    }
+
+    private fun literalNumber(inputs: JSONObject?, field: String): Boolean {
+        val value = inputs?.opt(field) ?: return false
+        return when (value) {
+            is Number -> true
+            is String -> value.trim().toDoubleOrNull() != null
+            else -> false
+        }
+    }
 
     /** 文本字段名; 取不到说明该字段不存在或不是字面量, 不能当提示词用 */
     private fun literalTextField(rawPrompt: JSONObject, nodeId: String): String? {

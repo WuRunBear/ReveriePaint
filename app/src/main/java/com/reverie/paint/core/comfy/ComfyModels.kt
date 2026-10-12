@@ -32,8 +32,8 @@ internal data class ComfyBindings(
     val outputNodeId: String,
 )
 
-/** 绑定角色: 用户在绑定行里能手动指定的四项 */
-internal enum class BindRole { PROMPT, NEGATIVE, IMAGE, OUTPUT }
+/** 绑定角色: 用户在绑定行里能手动指定的各项 */
+internal enum class BindRole { PROMPT, NEGATIVE, IMAGE, OUTPUT, STEPS, CFG, SEED }
 
 /**
  * 自动绑定未识别 / 需提醒的事项。
@@ -83,6 +83,15 @@ internal enum class BindNoteKey {
 
     /** 输出节点的 images 指向不存在, args = [outputNodeId, linkId] */
     OUTPUT_LINK_MISSING,
+
+    /** 采样器没有可写的 steps 字段, args = [samplerId] */
+    STEPS_FIELD_MISSING,
+
+    /** 采样器没有可写的 cfg 字段, args = [samplerId] */
+    CFG_FIELD_MISSING,
+
+    /** 采样器没有可写的 seed 字段, args = [samplerId] */
+    SEED_FIELD_MISSING,
 }
 
 /** 一条识别提示: 语义 key + 参数, 由 UI 层翻译 */
@@ -92,16 +101,20 @@ internal data class BindNote(
 )
 
 /**
- * 四个可手动编辑的角色 + 自动推导出的辅助绑定 (denoise / 蒙版 / 采样器)。
+ * 用户可手动编辑的角色 + 自动推导出的辅助绑定 (denoise / 蒙版 / 采样器)。
  *
- * 用户能改的是四个角色; [denoise] / [maskNodeId] / [samplerNodeId] 随自动结果原样
- * 带过, 保存时一并落盘 —— 生成链路读的就是 [toBindingSet] 的产物。
+ * 用户能改的是各个角色 (提示词 / 负面 / 图片 / 输出 / 步数 / CFG / 种子);
+ * [denoise] / [maskNodeId] / [samplerNodeId] 随自动结果原样带过, 保存时一并落盘
+ * —— 生成链路读的就是 [toBindingSet] 的产物。
  */
 internal data class EditableBindings(
     val prompt: ComfyBinding? = null,
     val negative: ComfyBinding? = null,
     val image: ComfyBinding? = null,
     val outputNodeId: String? = null,
+    val steps: ComfyBinding? = null,
+    val cfg: ComfyBinding? = null,
+    val seed: ComfyBinding? = null,
     val denoise: ComfyBinding? = null,
     val maskNodeId: String? = null,
     val samplerNodeId: String? = null,
@@ -116,16 +129,22 @@ internal data class EditableBindings(
         return AiBindingSet(
             base = ComfyBindings(prompt = p, image = image, outputNodeId = out),
             negative = negative,
+            steps = steps,
+            cfg = cfg,
+            seed = seed,
             denoise = denoise,
             maskNodeId = maskNodeId,
             samplerNodeId = samplerNodeId,
         )
     }
 
-    /** 只比较用户可改的四个角色, 用来判定"是否被手动改过" */
+    /** 只比较用户可改的各个角色, 用来判定"是否被手动改过" */
     fun sameRolesAs(other: EditableBindings): Boolean =
         prompt == other.prompt &&
             negative == other.negative &&
             image == other.image &&
-            outputNodeId == other.outputNodeId
+            outputNodeId == other.outputNodeId &&
+            steps == other.steps &&
+            cfg == other.cfg &&
+            seed == other.seed
 }

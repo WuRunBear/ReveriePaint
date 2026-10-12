@@ -135,6 +135,53 @@ class ComfyPromptBuilderTest {
         assertEquals(42L, out.getJSONObject("7").getJSONObject("inputs").getLong("seed"))
     }
 
+    // ---------------- steps / cfg 走绑定注入 ----------------
+
+    @Test
+    fun `injects steps and cfg through their bindings`() {
+        val out = built(AiGenerationParams(prompt = "x", steps = 33, cfg = 5.5f))
+        assertEquals(33, out.getJSONObject("7").getJSONObject("inputs").getInt("steps"))
+        assertEquals(5.5, out.getJSONObject("7").getJSONObject("inputs").getDouble("cfg"), 1e-9)
+    }
+
+    @Test
+    fun `null steps and cfg leave the template values alone`() {
+        val out = built(AiGenerationParams(prompt = "x", steps = null, cfg = null))
+        assertEquals(28, out.getJSONObject("7").getJSONObject("inputs").getInt("steps"))
+        assertEquals(7.0, out.getJSONObject("7").getJSONObject("inputs").getDouble("cfg"), 1e-9)
+    }
+
+    @Test
+    fun `steps are not injected when the workflow has no steps binding`() {
+        val noSampler = """
+            {
+              "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "p"}},
+              "2": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}}
+            }
+        """.trimIndent()
+        val raw = parsed(noSampler).rawPrompt
+        val set = AiBindingSet(base = ComfyBindings(prompt = ComfyBinding("1", "text"), outputNodeId = "2"))
+        val out = ComfyPromptBuilder.build(raw, set, AiGenerationParams(prompt = "x", steps = 40, cfg = 9f))
+        assertNull(ComfyPromptBuilder.valueAt(out, "1.inputs.steps"))
+        assertNull(ComfyPromptBuilder.valueAt(out, "1.inputs.cfg"))
+    }
+
+    @Test
+    fun `steps and cfg are not injected when the field is left unbound`() {
+        val ok = parsed()
+        val set = ComfyAutoBinder.bind(ok.rawPrompt, ok.workflow).bindingSet()!!
+        val noParams = set.copy(steps = null, cfg = null, seed = null)
+        val out =
+            ComfyPromptBuilder.build(
+                ok.rawPrompt,
+                noParams,
+                AiGenerationParams(prompt = "x", steps = 40, cfg = 9f, seed = 12345L),
+            )
+        assertEquals(28, out.getJSONObject("7").getJSONObject("inputs").getInt("steps"))
+        assertEquals(7.0, out.getJSONObject("7").getJSONObject("inputs").getDouble("cfg"), 1e-9)
+        assertEquals(42L, out.getJSONObject("7").getJSONObject("inputs").getLong("seed"))
+    }
+
     // ---------------- strength → denoise ----------------
 
     @Test

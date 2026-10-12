@@ -2324,6 +2324,13 @@
     <string name="ai_param_cfg">CFG</string>
     <string name="ai_param_seed">Seed</string>
     <string name="ai_action_random_seed">Reroll</string>
+    <string name="ai_negative_capsule">Negative prompt</string>
+    <string name="ai_negative_capsule_set">Negative prompt · filled</string>
+    <string name="ai_negative_placeholder">What to avoid; leave blank to not inject</string>
+    <string name="ai_param_steps_unbound">Workflow has no sampler steps binding</string>
+    <string name="ai_param_cfg_unbound">Workflow has no CFG binding</string>
+    <string name="ai_param_seed_unbound">Workflow has no seed binding</string>
+    <string name="ai_param_bind_now">Bind</string>
     <string name="ai_sub_free_generate">Generate from your description alone</string>
     <string name="ai_sub_refine_canvas">Repaint from the current canvas</string>
     <string name="ai_sub_inpaint">Repaint inside the selection, blended at the edges</string>
@@ -2722,6 +2729,9 @@
     <string name="comfy_bind_role_negative">Negative prompt</string>
     <string name="comfy_bind_role_image">Image input</string>
     <string name="comfy_bind_role_output">Output node</string>
+    <string name="comfy_bind_role_steps">Steps</string>
+    <string name="comfy_bind_role_cfg">CFG</string>
+    <string name="comfy_bind_role_seed">Seed</string>
     <string name="comfy_bind_change">Change</string>
     <string name="comfy_bind_set">Set</string>
     <string name="comfy_bind_unset">Not set</string>
@@ -2751,5 +2761,8 @@
     <string name="comfy_note_no_prompt_node">No usable prompt node found</string>
     <string name="comfy_note_no_output">No output node found (SaveImage or PreviewImage)</string>
     <string name="comfy_note_output_link_missing">Node #%2$s referenced by output node #%1$s images does not exist; using the output node itself</string>
+    <string name="comfy_note_steps_missing">Sampler #%1$s has no writable steps field; the steps slider will be unavailable</string>
+    <string name="comfy_note_cfg_missing">Sampler #%1$s has no writable CFG field; the CFG slider will be unavailable</string>
+    <string name="comfy_note_seed_missing">Sampler #%1$s has no writable seed field; the seed will be unavailable</string>
 </resources>
 

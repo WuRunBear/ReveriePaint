@@ -214,6 +214,9 @@ internal object ComfyWorkflowStore {
             put("prompt", encodeComfyBinding(set.base.prompt))
             set.base.image?.let { put("image", encodeComfyBinding(it)) }
             set.negative?.let { put("negative", encodeComfyBinding(it)) }
+            set.steps?.let { put("steps", encodeComfyBinding(it)) }
+            set.cfg?.let { put("cfg", encodeComfyBinding(it)) }
+            set.seed?.let { put("seed", encodeComfyBinding(it)) }
             set.denoise?.let { put("denoise", encodeComfyBinding(it)) }
             set.maskNodeId?.let { put("mask", it) }
             set.samplerNodeId?.let { put("sampler", it) }
@@ -237,6 +240,9 @@ internal object ComfyWorkflowStore {
                     outputNodeId = output,
                 ),
             negative = decodeComfyBinding(obj.optJSONObject("negative")),
+            steps = decodeComfyBinding(obj.optJSONObject("steps")),
+            cfg = decodeComfyBinding(obj.optJSONObject("cfg")),
+            seed = decodeComfyBinding(obj.optJSONObject("seed")),
             denoise = decodeComfyBinding(obj.optJSONObject("denoise")),
             maskNodeId = obj.optString("mask").takeIf { it.isNotBlank() },
             samplerNodeId = obj.optString("sampler").takeIf { it.isNotBlank() },
