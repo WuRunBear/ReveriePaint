@@ -45,6 +45,7 @@ fun Tool.labelRes(): Int = when (this) {
     Tool.TRANSFORM -> R.string.tool_transform
     Tool.CROP -> R.string.tool_crop
     Tool.PICKER -> R.string.tool_picker
+    Tool.AI_IMAGE -> R.string.tool_ai_image
     Tool.TEXT -> R.string.tool_text
     Tool.LIQUIFY -> R.string.tool_liquify
     Tool.MEASURE -> R.string.tool_measure

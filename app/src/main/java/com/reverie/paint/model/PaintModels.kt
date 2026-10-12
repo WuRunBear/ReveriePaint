@@ -69,6 +69,10 @@ enum class Tool(
     QUICK_LAYER("quick_layer", "快捷图层", ToolGroup.VIEW),
     SYMMETRY("symmetry", "对称", ToolGroup.OTHER),
     PERSPECTIVE("perspective", "透视", ToolGroup.OTHER),
+
+    // AI 生图: 不是"开浮窗"的工具 (那些在 VIEW 组), 而是带底部属性面板的操作型工具,
+    // 语义上与液化/测量同类, 故归 OTHER (见 AI-PAINT-UX.md §6 C4)
+    AI_IMAGE("ai_image", "AI 生图", ToolGroup.OTHER),
     ;
 
     companion object {

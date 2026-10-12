@@ -494,7 +494,10 @@ fun toolIcon(tool: Tool): Int =
         Tool.PICKER -> R.drawable.ic_picker
         Tool.FILL -> R.drawable.ic_fill
         Tool.LASSO -> R.drawable.ic_lasso
-        Tool.MAGICWAND -> R.drawable.ic_magicwand
+        // 魔棒按颜色选, 用水滴更贴切; 魔杖留给 AI 生图, 避免两个入口长得一样
+        // (AI-PAINT-UX.md §5.3 的区分要求)
+        Tool.MAGICWAND -> R.drawable.ic_droplet
+        Tool.AI_IMAGE -> R.drawable.ic_magicwand
         Tool.SHAPES -> R.drawable.ic_shapes
         Tool.LINE -> R.drawable.ic_minus
         Tool.RECT -> R.drawable.ic_rect

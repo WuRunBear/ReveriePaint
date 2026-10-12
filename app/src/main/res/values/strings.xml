@@ -2307,6 +2307,48 @@
     <string name="selection_count_label">%d 个选区</string>
     <string name="selection_bottom_action_save">存储选区</string>
 
+    <!-- ============ AI 生图 (S1 面板) ============ -->
+    <!-- 主按钮读法由 AiButtonResolver 求, 这几个 key 与 resolver 的常量一一对应 -->
+    <string name="tool_ai_image">AI 生图</string>
+    <string name="ai_panel_title">AI 生图</string>
+    <string name="ai_action_generate">生成</string>
+    <string name="ai_action_fill">填充</string>
+    <string name="ai_action_expand">扩展</string>
+    <string name="ai_action_queue_more">再排一个</string>
+    <string name="ai_action_regenerate">再生成</string>
+    <string name="ai_action_settings">生成参数</string>
+    <string name="ai_advanced_title">生成参数</string>
+    <string name="ai_collapse">收起</string>
+    <string name="ai_expand">展开</string>
+    <string name="ai_param_steps">步数</string>
+    <string name="ai_param_cfg">CFG</string>
+    <string name="ai_param_seed">种子</string>
+    <string name="ai_action_random_seed">换种子</string>
+    <string name="ai_sub_free_generate">从你的描述凭空生成</string>
+    <string name="ai_sub_refine_canvas">以当前画面为底重绘</string>
+    <string name="ai_sub_inpaint">只在选区内重画，边缘与周边融合</string>
+    <string name="ai_sub_outpaint">向画布外延展周边内容</string>
+    <string name="ai_sub_add_content">在选区内补出新的内容</string>
+    <string name="ai_sub_remove_content">抹掉选区里的东西，接上背后</string>
+    <string name="ai_sub_replace_bg">换掉选区背后的内容</string>
+    <string name="ai_prompt_placeholder">描述你想要的，留空则照着周边续</string>
+    <string name="ai_mode_fill">填充</string>
+    <string name="ai_mode_extend">扩展</string>
+    <string name="ai_mode_add">添加内容</string>
+    <string name="ai_mode_remove">移除内容</string>
+    <string name="ai_mode_replace_bg">替换背景</string>
+    <string name="ai_source_selection">选区</string>
+    <string name="ai_source_canvas">整个画布</string>
+    <string name="ai_source_reference">参考图</string>
+    <string name="ai_strength">改动幅度</string>
+    <string name="ai_strength_value">%1$d%%</string>
+    <string name="ai_strength_capsule">改动幅度 %1$d%%</string>
+    <string name="ai_selection_size">选区 %1$d×%2$d</string>
+    <string name="ai_no_selection">没有选区 · 整个画布</string>
+    <string name="ai_progress_steps">第 %1$d/%2$d 步</string>
+    <string name="ai_queued_ahead">排队中 · 前面 %1$d 个</string>
+    <string name="ai_variant_index">%1$d</string>
+
     <!-- Theme Selection Mask Settings -->
     <string name="theme_category_selection_mask">选区显示</string>
     <string name="theme_selection_mask_color_title">选区蒙版颜色</string>

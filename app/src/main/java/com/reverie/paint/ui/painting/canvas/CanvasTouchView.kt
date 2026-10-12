@@ -976,6 +976,10 @@ class CanvasTouchView(context: Context) : View(context) {
                 val by = if (v.quickBrushWindowY >= 0f) v.quickBrushWindowY else ((h - bh) / 2f).coerceAtLeast(0f)
                 list.add(android.graphics.RectF(bx, by, bx + bw, by + bh))
             }
+            // AI 生图面板 (动态通道): 高度随形态在 1~4 行之间变, 手抄不出静态常量,
+            // 所以面板自己量自己、每次布局回写一个包围盒快照 (见 PaintViewModelComfyUi)。
+            // 与上面几个静态矩形不同, 它**不判开关** —— null 就是没面板, 跳过即可。
+            v.aiUi.panelBounds?.let { list.add(it) }
         }
         uiExclusionRects = list.toTypedArray()
     }
@@ -1993,6 +1997,14 @@ class CanvasTouchView(context: Context) : View(context) {
             val lx = if (v.quickLayerWindowX >= 0f) v.quickLayerWindowX else ((width - lw) / 2f).coerceAtLeast(0f)
             val ly = if (v.quickLayerWindowY >= 0f) v.quickLayerWindowY else ((height - lh) / 2f).coerceAtLeast(0f)
             if (x >= lx && x <= lx + lw && y >= ly && y <= ly + lh) {
+                return true
+            }
+        }
+
+        // AI 生图面板 (动态通道, 几何与 rebuildUiExclusionRects 同源):
+        // 面板高度随形态变化, 静态 dp 常量表达不了, 面板自己回写包围盒。
+        v.aiUi.panelBounds?.let { r ->
+            if (x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) {
                 return true
             }
         }

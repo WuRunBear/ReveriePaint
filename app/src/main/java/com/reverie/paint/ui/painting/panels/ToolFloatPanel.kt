@@ -37,11 +37,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.reverie.paint.ui.components.noRippleClickable
@@ -55,19 +60,35 @@ import com.reverie.paint.ui.theme.Glass
 import com.reverie.paint.ui.theme.glassBorder
 import com.reverie.paint.core.*
 
+/** 面板在父容器里的静止锚点 —— 决定拖拽钳制时"能往哪边挪" */
+enum class FloatPanelAnchor { TOP_START, BOTTOM_CENTER }
+
 /**
  * Premium glassmorphism-style floating capsule with entry animations and drag support.
+ *
+ * @param offsetBounds 父容器可用矩形 (dp)。默认 null = **不钳制**, 这是既有 11 个调用点的
+ *   历史行为; 传了就会把拖拽位移 clamp 在屏幕内。
+ *   为什么需要它: 面板尺寸是动态的 (AI 面板随形态在 1~4 行之间变), 不钳制的话能一路
+ *   拖出屏幕再也抓不回来。
+ *   单位是 dp 而不是 px: `paintingUiScale` 只缩放 [LocalDensity], "量"和"用"走同一个
+ *   density, 缩放自动抵消 (绕开 AI-PAINT-UX.md §6 C3 的手算坑)。
+ * @param anchor 面板的静止锚点, 与调用点的 `Modifier.align(...)` 保持一致
  */
 @Composable
 fun ToolFloatPanel(
     modifier: Modifier = Modifier,
     vm: PaintViewModel? = null,
     hazeState: HazeState? = null,
+    offsetBounds: Rect? = null,
+    anchor: FloatPanelAnchor = FloatPanelAnchor.BOTTOM_CENTER,
     content: @Composable () -> Unit,
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
+    val density = LocalDensity.current
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
     val capsuleShape = RoundedCornerShape(18.dp)
+    // 面板静止时的尺寸 (不含拖拽位移), 钳制要用它算可用行程
+    var panelSize by remember { mutableStateOf(IntSize.Zero) }
 
     AnimatedVisibility(
         visible = true,
@@ -77,10 +98,11 @@ fun ToolFloatPanel(
         Row(
             modifier = modifier
                 .offset { IntOffset(dragOffset.x.roundToInt(), dragOffset.y.roundToInt()) }
-                .pointerInput(Unit) {
+                .onSizeChanged { panelSize = it }
+                .pointerInput(offsetBounds, anchor) {
                     detectDragGestures { change, dragAmount ->
                         change.consume()
-                        dragOffset += dragAmount
+                        dragOffset = clampDragOffset(dragOffset + dragAmount, offsetBounds, panelSize, anchor, this)
                     }
                 }
                 .padding(horizontal = 12.dp, vertical = 8.dp)
@@ -104,6 +126,36 @@ fun ToolFloatPanel(
         ) {
             content()
         }
+    }
+}
+
+/**
+ * 把拖拽位移钳制在父容器内, 贴边留 [DRAG_EDGE_MARGIN_DP] 余量。
+ *
+ * 面板静止时靠 [anchor] 对齐, 所以可拖区间是"静止位置 ± 可用行程的一半/全长"。
+ * 完全贴边时用户会以为"卡住了" (它其实只是到头了), 所以留一点余量。
+ */
+private const val DRAG_EDGE_MARGIN_DP = 8f
+
+private fun clampDragOffset(
+    offset: Offset,
+    bounds: Rect?,
+    panelSize: IntSize,
+    anchor: FloatPanelAnchor,
+    density: Density,
+): Offset {
+    if (bounds == null || panelSize.width <= 0 || panelSize.height <= 0) return offset
+    return with(density) {
+        val marginPx = DRAG_EDGE_MARGIN_DP.dp.toPx()
+        val slackX = (bounds.width - panelSize.width - marginPx * 2f).coerceAtLeast(0f)
+        val slackY = (bounds.height - panelSize.height - marginPx * 2f).coerceAtLeast(0f)
+        val centered = anchor == FloatPanelAnchor.BOTTOM_CENTER
+        val baseX = if (centered) slackX / 2f else 0f
+        val baseY = if (centered) slackY else 0f
+        Offset(
+            x = offset.x.coerceIn(-baseX, slackX - baseX),
+            y = offset.y.coerceIn(-baseY, slackY - baseY),
+        )
     }
 }
 

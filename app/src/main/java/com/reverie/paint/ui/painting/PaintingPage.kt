@@ -155,6 +155,9 @@ private val shapeTools =
         Tool.PATH,
     )
 
+/** ToolFloatPanel 外壳的左右内边距 (12.dp × 2), 算面板可用宽度时要扣掉 */
+private val AI_PANEL_SHELL_PADDING = 24.dp
+
 /**
  * Painting page: full-bleed canvas with touch painting + gestures,
  * overlaid by the top bar, left tool rail and popup panels.
@@ -1058,6 +1061,16 @@ fun PaintingPage(
                                 }
                                 moreToolsOpen = false
                             }
+                            // AI 生图: 切工具态, 底部面板自己浮出来 (入口 E1)。
+                            // 选区浮层按 `tool in selectionTools` 自动让路, 不用改它的条件。
+                            Tool.AI_IMAGE -> {
+                                if (vm.currentToolId == Tool.AI_IMAGE.id) {
+                                    vm.applyTool(Tool.BRUSH.id)
+                                } else {
+                                    vm.applyTool(Tool.AI_IMAGE.id)
+                                }
+                                moreToolsOpen = false
+                            }
                             else -> {
                                 vm.applyTool(it.id)
                                 if (it in selectionTools) {
@@ -1468,6 +1481,32 @@ fun PaintingPage(
                     selectionPanelOffsetX += dx
                     selectionPanelOffsetY += dy
                 },
+            )
+        }
+
+        // ---- AI 生图面板 (与选区浮层合流, 同一个 BottomCenter 坑位) ----
+        // 可见条件由面板自己算: 选了 AI 工具, 或有进行中的 AI 会话 (入口 E1/E2/E3)。
+        // 选区浮层的条件是 `tool in selectionTools`, 切到 AI 工具后它自动让路, 无需改动。
+        //
+        // 宽度: 比别家底栏多让开左侧工具栏 (ToolRail zIndex 50, 会盖住面板)。别的底栏
+        // 被盖住只是难看, AI 面板被盖住的是**生成方式/取材两个下拉** —— 直接点不到。
+        // 做法: 宽度 = 屏宽 − 工具栏, 再整体右移半个工具栏宽, 于是它在"剩下的地板"里居中。
+        androidx.compose.foundation.layout.BoxWithConstraints(
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            val railDp = 56.dp
+            val panelDensity = LocalDensity.current
+            val railShift = with(panelDensity) { railDp.toPx() / 2f } * if (vm.leftHandMode) -1f else 1f
+            AiGeneratePanel(
+                vm = vm,
+                tool = tool,
+                hazeState = hazeState,
+                dragBounds = androidx.compose.ui.geometry.Rect(0f, 0f, maxWidth.value, maxHeight.value),
+                maxContentWidth = maxWidth - railDp - AI_PANEL_SHELL_PADDING,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .offset { IntOffset(railShift.roundToInt(), 0) }
+                    .padding(bottom = 24.dp),
             )
         }
 
@@ -1940,6 +1979,15 @@ fun PaintingPage(
                                     )
                                 drawingGuidePanelOpen = true
                                 vm.applyTool(Tool.BRUSH.id)
+                            }
+                            moreToolsOpen = false
+                        }
+                        // 见文件里另一处同名分支的注释: AI 生图只切工具态
+                        Tool.AI_IMAGE -> {
+                            if (vm.currentToolId == Tool.AI_IMAGE.id) {
+                                vm.applyTool(Tool.BRUSH.id)
+                            } else {
+                                vm.applyTool(Tool.AI_IMAGE.id)
                             }
                             moreToolsOpen = false
                         }

@@ -2307,6 +2307,48 @@
     <string name="selection_count_label">%d selections</string>
     <string name="selection_bottom_action_save">Save Selection</string>
 
+    <!-- ============ AI Image (S1 panel) ============ -->
+    <!-- Main action wording comes from AiButtonResolver; these keys mirror its constants -->
+    <string name="tool_ai_image">AI Image</string>
+    <string name="ai_panel_title">AI Image</string>
+    <string name="ai_action_generate">Generate</string>
+    <string name="ai_action_fill">Fill</string>
+    <string name="ai_action_expand">Expand</string>
+    <string name="ai_action_queue_more">Queue another</string>
+    <string name="ai_action_regenerate">Regenerate</string>
+    <string name="ai_action_settings">Settings</string>
+    <string name="ai_advanced_title">Generation Settings</string>
+    <string name="ai_collapse">Collapse</string>
+    <string name="ai_expand">Expand</string>
+    <string name="ai_param_steps">Steps</string>
+    <string name="ai_param_cfg">CFG</string>
+    <string name="ai_param_seed">Seed</string>
+    <string name="ai_action_random_seed">Reroll</string>
+    <string name="ai_sub_free_generate">Generate from your description alone</string>
+    <string name="ai_sub_refine_canvas">Repaint from the current canvas</string>
+    <string name="ai_sub_inpaint">Repaint inside the selection, blended at the edges</string>
+    <string name="ai_sub_outpaint">Extend the surroundings outward</string>
+    <string name="ai_sub_add_content">Add new content inside the selection</string>
+    <string name="ai_sub_remove_content">Remove what is inside, fill behind</string>
+    <string name="ai_sub_replace_bg">Replace the content behind the selection</string>
+    <string name="ai_prompt_placeholder">Describe it, or leave blank to continue</string>
+    <string name="ai_mode_fill">Fill</string>
+    <string name="ai_mode_extend">Expand</string>
+    <string name="ai_mode_add">Add content</string>
+    <string name="ai_mode_remove">Remove content</string>
+    <string name="ai_mode_replace_bg">Replace background</string>
+    <string name="ai_source_selection">Selection</string>
+    <string name="ai_source_canvas">Whole canvas</string>
+    <string name="ai_source_reference">Reference</string>
+    <string name="ai_strength">Strength</string>
+    <string name="ai_strength_value">%1$d%%</string>
+    <string name="ai_strength_capsule">Strength %1$d%%</string>
+    <string name="ai_selection_size">Selection %1$d×%2$d</string>
+    <string name="ai_no_selection">No selection · whole canvas</string>
+    <string name="ai_progress_steps">Step %1$d/%2$d</string>
+    <string name="ai_queued_ahead">Queued · %1$d ahead</string>
+    <string name="ai_variant_index">%1$d</string>
+
     <!-- Theme Selection Mask Settings -->
     <string name="theme_category_selection_mask">Selection Display</string>
     <string name="theme_selection_mask_color_title">Mask Color</string>
