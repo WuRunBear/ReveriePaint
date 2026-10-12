@@ -12,6 +12,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +25,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -48,6 +50,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.res.painterResource
@@ -61,6 +65,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.reverie.paint.R
 import com.reverie.paint.core.AiPanelForm
+import com.reverie.paint.core.AiUiVariant
 import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.core.aiButtonLabel
 import com.reverie.paint.core.aiPanelVisible
@@ -148,12 +153,16 @@ fun AiGeneratePanel(
                         }
                     },
             ) {
-                when (ui.form) {
-                    AiPanelForm.READY,
-                    AiPanelForm.GENERATING,
-                    -> AiPanelIntent(vm = vm, generating = ui.form == AiPanelForm.GENERATING)
+                Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                    // 失败提示: 我们自己的文案走 stringResource, ComfyUI 原文原样显示
+                    AiErrorBanner(vm = vm)
+                    when (ui.form) {
+                        AiPanelForm.READY,
+                        AiPanelForm.GENERATING,
+                        -> AiPanelIntent(vm = vm, generating = ui.form == AiPanelForm.GENERATING)
 
-                    AiPanelForm.RESULT -> AiPanelVariantStrip(vm = vm)
+                        AiPanelForm.RESULT -> AiPanelVariantStrip(vm = vm)
+                    }
                 }
             }
         }
@@ -182,6 +191,44 @@ fun AiGeneratePanel(
             vm = vm,
             workflow = target,
             onDismiss = { vm.closeComfyWorkflowDetail() },
+        )
+    }
+}
+
+/**
+ * 失败提示条。
+ *
+ * 两种来源分开渲染: [com.reverie.paint.core.AiUiState.errorRaw] 是 ComfyUI 的原文
+ * (**不翻译不截断** —— 用户排查的唯一依据), [com.reverie.paint.core.AiUiState.errorRes]
+ * 是我们自己的分类文案 (走 `stringResource`)。两者都为空时不占位。
+ */
+@Composable
+private fun AiErrorBanner(vm: PaintViewModel) {
+    val ui = vm.aiUi
+    val raw = ui.errorRaw
+    val res = ui.errorRes
+    if (raw == null && res == null) return
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(9.dp))
+            .background(Morandi.error.copy(alpha = 0.16f))
+            .padding(horizontal = 10.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_alert_triangle),
+            contentDescription = null,
+            tint = Morandi.error,
+            modifier = Modifier.size(14.dp),
+        )
+        Text(
+            text = raw ?: stringResource(res!!),
+            fontSize = 11.sp,
+            color = Morandi.text,
+            maxLines = 4,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -1019,7 +1066,7 @@ private fun AiPanelVariantStrip(
         )
         ui.variants.forEach { variant ->
             AiVariantThumb(
-                index = variant.index,
+                variant = variant,
                 selected = variant.index == ui.selectedVariant,
                 onClick = { ui.selectedVariant = variant.index },
             )
@@ -1046,7 +1093,7 @@ private fun AiPanelVariantStrip(
 
 @Composable
 private fun AiVariantThumb(
-    index: Int,
+    variant: AiUiVariant,
     selected: Boolean,
     onClick: () -> Unit,
 ) {
@@ -1065,23 +1112,34 @@ private fun AiVariantThumb(
             .noRippleClickable { onClick() },
         contentAlignment = Alignment.Center,
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(1.dp),
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_image),
+        val bitmap = variant.bitmap
+        if (bitmap != null && !bitmap.isRecycled) {
+            // 真实结果缩略图
+            Image(
+                bitmap = bitmap.asImageBitmap(),
                 contentDescription = null,
-                tint = Morandi.subText.copy(alpha = if (selected) 0.55f else 0.3f),
-                modifier = Modifier.size(16.dp),
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
             )
-            Text(
-                text = stringResource(R.string.ai_variant_index, index + 1),
-                fontSize = 9.sp,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (selected) Morandi.accent else Morandi.subText.copy(alpha = 0.65f),
-                textAlign = TextAlign.Center,
-            )
+        } else {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(1.dp),
+            ) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_image),
+                    contentDescription = null,
+                    tint = Morandi.subText.copy(alpha = if (selected) 0.55f else 0.3f),
+                    modifier = Modifier.size(16.dp),
+                )
+                Text(
+                    text = stringResource(R.string.ai_variant_index, variant.index + 1),
+                    fontSize = 9.sp,
+                    fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                    color = if (selected) Morandi.accent else Morandi.subText.copy(alpha = 0.65f),
+                    textAlign = TextAlign.Center,
+                )
+            }
         }
     }
 }

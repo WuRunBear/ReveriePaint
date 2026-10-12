@@ -12,6 +12,8 @@ import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import org.json.JSONObject
 import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
@@ -64,6 +66,29 @@ internal class ComfyClient private constructor(
 
     /** WebSocket 端点，进度推送用 */
     fun webSocketUrl(clientId: String): String = ComfyUrl.webSocketUrl(baseUrl, clientId)
+
+    /**
+     * WebSocket 建连请求。
+     *
+     * 复用与 HTTP 完全相同的认证头 —— 否则开了 Basic 认证的服务器会在握手阶段直接 401，
+     * 表现为「HTTP 测试连接成功但生成永远收不到进度」。自签信任由传入的 [OkHttpClient] 承担。
+     */
+    fun webSocketRequest(clientId: String): Request =
+        Request
+            .Builder()
+            .url(webSocketUrl(clientId))
+            .headers(authHeaders)
+            .build()
+
+    /** 建 WebSocket。回调线程由 OkHttp 决定，调用方负责切回主线程 */
+    fun newWebSocket(
+        request: Request,
+        listener: WebSocketListener,
+    ): WebSocket = client.newWebSocket(request, listener)
+
+    /** 握手失败复用与 HTTP 相同的分类（含「本次是否发过认证头」的判定） */
+    fun classifyHandshakeFailure(response: okhttp3.Response?): ComfyConnectionError =
+        if (response == null) ComfyConnectionError.Unreachable else classify(response.code, response)
 
     /** 结果图的可访问 URL */
     fun viewUrl(ref: ComfyImageRef): String =

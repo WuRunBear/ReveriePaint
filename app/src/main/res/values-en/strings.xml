@@ -2355,6 +2355,16 @@
     <string name="ai_progress_steps">Step %1$d/%2$d</string>
     <string name="ai_queued_ahead">Queued · %1$d ahead</string>
     <string name="ai_variant_index">%1$d</string>
+    <string name="ai_error_not_ready">Canvas is not ready, try again shortly</string>
+    <string name="ai_error_no_server">Configure a ComfyUI server first</string>
+    <string name="ai_error_no_workflow">Import and select a workflow first</string>
+    <string name="ai_error_workflow_unusable">This workflow is missing a prompt or output binding</string>
+    <string name="ai_error_export_failed">Failed to export the canvas</string>
+    <string name="ai_error_upload_failed">Failed to upload the input image</string>
+    <string name="ai_error_submit_failed">Failed to submit the generation</string>
+    <string name="ai_error_fetch_failed">Failed to fetch the result image</string>
+    <string name="ai_error_decode_failed">Failed to decode the result image</string>
+    <string name="ai_error_server">Server returned an error</string>
 
     <!-- Theme Selection Mask Settings -->
     <string name="theme_category_selection_mask">Selection Display</string>

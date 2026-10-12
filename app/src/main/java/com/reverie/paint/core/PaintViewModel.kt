@@ -4104,6 +4104,8 @@ class PaintViewModel : ViewModel() {
         renderThread = null
         renderHandler = null
         brushPresetsLoaded = false
+        // 关闭 AI 生成的 WebSocket, 避免连接随 ViewModel 泄漏 (取消/退出路径)
+        shutdownAiComfy()
         super.onCleared()
     }
 

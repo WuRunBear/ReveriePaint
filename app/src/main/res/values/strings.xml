@@ -2355,6 +2355,16 @@
     <string name="ai_progress_steps">第 %1$d/%2$d 步</string>
     <string name="ai_queued_ahead">排队中 · 前面 %1$d 个</string>
     <string name="ai_variant_index">%1$d</string>
+    <string name="ai_error_not_ready">画布尚未就绪, 请稍后再试</string>
+    <string name="ai_error_no_server">请先配置 ComfyUI 服务器</string>
+    <string name="ai_error_no_workflow">请先导入并选择工作流</string>
+    <string name="ai_error_workflow_unusable">当前工作流缺少提示词或输出节点绑定</string>
+    <string name="ai_error_export_failed">导出画布失败</string>
+    <string name="ai_error_upload_failed">上传输入图失败</string>
+    <string name="ai_error_submit_failed">提交生成任务失败</string>
+    <string name="ai_error_fetch_failed">获取结果图失败</string>
+    <string name="ai_error_decode_failed">结果图解码失败</string>
+    <string name="ai_error_server">服务器返回错误</string>
 
     <!-- Theme Selection Mask Settings -->
     <string name="theme_category_selection_mask">选区显示</string>

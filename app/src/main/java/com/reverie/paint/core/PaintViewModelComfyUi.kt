@@ -4,6 +4,8 @@
 
 package com.reverie.paint.core
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.RectF
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
@@ -13,32 +15,43 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewModelScope
+import com.reverie.paint.R
 import com.reverie.paint.core.comfy.AiButtonLabel
 import com.reverie.paint.core.comfy.AiButtonResolver
 import com.reverie.paint.core.comfy.AiContext
 import com.reverie.paint.core.comfy.AiGenerateMode
+import com.reverie.paint.core.comfy.AiGenerationParams
 import com.reverie.paint.core.comfy.AiSourceKind
+import com.reverie.paint.core.comfy.CanvasExportResult
 import com.reverie.paint.core.comfy.ComfyAuthMode
 import com.reverie.paint.core.comfy.ComfyCall
+import com.reverie.paint.core.comfy.ComfyCanvasExporter
 import com.reverie.paint.core.comfy.ComfyClient
 import com.reverie.paint.core.comfy.ComfyConnectionError
 import com.reverie.paint.core.comfy.ComfyCredentialStore
 import com.reverie.paint.core.comfy.ComfyCredentials
+import com.reverie.paint.core.comfy.ComfyImageRef
+import com.reverie.paint.core.comfy.ComfyParamDefaultsReader
+import com.reverie.paint.core.comfy.ComfyPromptBuilder
 import com.reverie.paint.core.comfy.ComfyServerConfig
+import com.reverie.paint.core.comfy.ComfySocket
+import com.reverie.paint.core.comfy.ComfySocketEvent
 import com.reverie.paint.core.comfy.ComfyUrl
+import com.reverie.paint.core.comfy.ComfyWorkflowStore
 import com.reverie.paint.core.sync.SyncHttp
 import com.reverie.paint.model.Tool
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.util.UUID
 
 /**
- * S1 · AI 辅助绘画的**会话 UI 状态**。
+ * AI 辅助绘画的**会话 UI 状态**。
  *
- * 这里只挂 UI 状态镜像, 不持有任何像素 (铁律 1: 文档真身在 C++)。
- * 一期 (S1) 用假数据把三形态跑通, 不连网络 —— 引擎侧接线是 S2 的事。
+ * 这里只挂 UI 状态镜像, 不持有文档像素 (铁律 1: 文档真身在 C++)。变体条里的位图是
+ * ComfyUI 返回的结果缩略图, 属于网络产物而非文档数据, 因此可以安全地挂在这里。
  *
  * 三形态 (AI-PAINT-UX.md §4.3):
  * - [AiPanelForm.READY]      形态 A · 就绪: 生成方式 / 提示词 / 取材 / 改动幅度
@@ -47,17 +60,14 @@ import kotlinx.coroutines.withContext
  */
 internal enum class AiPanelForm { READY, GENERATING, RESULT }
 
-/** 一个变体 (形态 C 缩略图占位)。一期只有序号, 二期挂 [com.reverie.paint.core.comfy.AiVariant] 的位图 */
-internal data class AiUiVariant(val index: Int)
+/** 一个变体: 序号 + 真实结果缩略图 (位图由生成链路填充, UI 只负责画) */
+internal data class AiUiVariant(
+    val index: Int,
+    val bitmap: Bitmap? = null,
+)
 
-/** 一批生成的步数默认值 —— 对齐真实 SD 的 20~30 步量级 */
+/** 一批生成的步数默认值 —— 真实生成时由工作流步数 / ComfyUI progress 消息覆盖 */
 internal const val AI_DEFAULT_STEPS = 28
-
-/** 每步的假耗时 (毫秒)。走 Motion 之外的时间常数, 因为它模拟的是"远端算力", 不是 UI 动效 */
-private const val AI_FAKE_STEP_MS = 620L
-
-/** 一批结果的变体数 */
-private const val AI_FAKE_VARIANT_COUNT = 4
 
 /**
  * AI 面板的全部 UI 状态。
@@ -107,7 +117,7 @@ internal class AiUiState {
     /**
      * 采样步数。**走绑定注入** —— 只有当前工作流绑定了 steps 字段时, 面板滑块才可用,
      * 调整即随提交写进工作流; 未绑定时禁用 (见 `AiGeneratePanel`)。
-     * 生成中它同时是假进度条的总步数来源。
+     * 生成中作为「工作流真实步数」的初值, 首个 progress 消息到达后由 ComfyUI 实测值覆盖。
      */
     var steps by mutableIntStateOf(AI_DEFAULT_STEPS)
 
@@ -126,11 +136,22 @@ internal class AiUiState {
 
     // ---- 形态 B: 生成中 ----
 
-    /** 当前任务已完成的步数 */
+    /** 当前正在跑的任务已完成的步数 (来自 ComfyUI `progress` 消息) */
     var runningStep by mutableIntStateOf(0)
+
+    /** 这一批的总步数。提交时先填工作流真实步数, 首个 progress 消息到达后用 `max` 覆盖 */
+    var totalSteps by mutableIntStateOf(AI_DEFAULT_STEPS)
 
     /** 后面还排着几个任务 (连按主按钮是合法的, 不做并发限制) */
     var queuedCount by mutableIntStateOf(0)
+
+    // ---- 失败提示 (两种来源分开存: 我们的提示走资源, ComfyUI 原文原样显示) ----
+
+    /** 我们自己产生的失败提示 (string res), 由 UI 层 `stringResource` 翻译 */
+    var errorRes by mutableStateOf<Int?>(null)
+
+    /** ComfyUI 返回的**原始错误文本**, 不翻译不截断 —— 用户排查的唯一依据 */
+    var errorRaw by mutableStateOf<String?>(null)
 
     // ---- 形态 C: 结果待选 ----
 
@@ -142,9 +163,37 @@ internal class AiUiState {
     // ---- 面板几何 (动态触摸避让, 见 CanvasTouchView.rebuildUiExclusionRects) ----
 
     /**
-     * 队列驱动器。**全局只允许一个**, 否则连按主按钮会开出多条并发协程把进度搅乱。
+     * 生成驱动 Job (仅用于「会话是否在跑」的粗判与取消; 真实任务表见 [activeTasks])。
      */
     internal var driverJob: Job? = null
+
+    // ---- 真实生成链路 (全部由 createComfySession 一族的函数维护, 不是 Compose 状态) ----
+
+    /**
+     * 已提交但尚未出结果的任务表 (`prompt_id -> 任务`)。
+     *
+     * 用 [LinkedHashMap] 保序: 最先提交的排在前面, 正好对应 ComfyUI FIFO 的执行顺序,
+     * 因此 `values.first()` 就是「正在跑的那个」。
+     */
+    internal val activeTasks = LinkedHashMap<String, AiTask>()
+
+    /** 还在「导出 → 上传 → 提交」途中的提交数, 用来避免过早判定「全部结束」 */
+    internal var pendingSubmissions = 0
+
+    /**
+     * 会话令牌。取消 / 放弃 / 应用时 +1, 使所有在途提交与取图协程作废 ——
+     * 防止「点了取消还冒出结果」。
+     */
+    internal var sessionToken = 0
+
+    /** 当前会话的 WebSocket (一个 clientId 一条), 空闲时不自动断, 由取消/退出显式关闭 */
+    internal var socket: ComfySocket? = null
+
+    /** 本次会话的 clientId (提交与 WebSocket 必须一致, 否则收不到进度) */
+    internal var clientId: String? = null
+
+    /** 最近一次建好的 HTTP 客户端, 取消时用它 `POST /interrupt` */
+    internal var activeClient: ComfyClient? = null
 
     /**
      * 面板在画布坐标系里的实际包围盒, 由 Compose 侧 `onGloballyPositioned` 回写。
@@ -178,14 +227,24 @@ internal class AiUiState {
      */
     var sessionConsumed by mutableStateOf(false)
 
-    /** 一批的总步数 (面板的 `第 N/M 步` 要读它, 不能在 UI 侧写死) */
-    val totalSteps: Int get() = steps.coerceAtLeast(1)
-
     /** 生成中的进度 0..1 */
     val progress: Float
-        get() = (runningStep.toFloat() / totalSteps).coerceIn(0f, 1f)
+        get() = (runningStep.toFloat() / totalSteps.coerceAtLeast(1)).coerceIn(0f, 1f)
 }
 
+/**
+ * 一次已提交的生成任务。
+ *
+ * @property promptId ComfyUI 分配的 prompt_id, 结果归属的主键
+ * @property outputNodeId 工作流绑定的产图节点 (node 匹配的兜底归属依据)
+ * @property awaitingImages 已收到 executed 且正在取图 —— 用来防止随后的
+ *   `executing node=null` 在取图完成前把任务提前收尾
+ */
+internal class AiTask(
+    val promptId: String,
+    val outputNodeId: String,
+    var awaitingImages: Boolean = false,
+)
 /** 主按钮读法 —— 每次重组现算, 绝不在 if-else 里手写分支 (原则 P3) */
 internal fun PaintViewModel.aiButtonLabel(): AiButtonLabel =
     AiButtonResolver.resolve(
@@ -209,61 +268,65 @@ internal fun PaintViewModel.aiPanelVisible(tool: Tool): Boolean =
  * 点主按钮。
  *
  * **不禁用**: 生成中再按一次 = 排队 (COMFYUI-DESIGN.md §2.11 的既定决策, 不做并发限制)。
- * 用户连按 3 次就是排 3 个, 这是合法的、甚至是想要的。
+ * 用户连按 3 次就是排 3 个 —— 每个提交立即发出, 结果按 `prompt_id` 各自归属, 互不串批。
+ *
+ * 未配置服务器 / 未导入工作流时**明确提示**, 绝不静默失败 (面板此时通常已隐藏生成控件,
+ * 这里兜住「从结果带点再生成」等旁路入口)。
  */
 internal fun PaintViewModel.submitAiGeneration() {
     val ui = aiUi
     ui.panelOpen = true
-    // 判断依据是"驱动是否在跑", 不是 form —— 后者在形态切换的瞬间可能与真实状态不一致
-    if (ui.driverJob?.isActive == true) {
-        // 已有任务在跑: 这一批排队 (不做并发限制, 连按就是排多个)
-        ui.queuedCount += 1
-    } else {
-        // 空闲: 这一批是第一个, 清零排队数, 否则驱动会多跑一批
-        ui.queuedCount = 0
-        ui.runningStep = 0
-        ui.form = AiPanelForm.GENERATING
+    if (!requireAiReady(ui)) {
+        if (currentToolId == Tool.AI_IMAGE.id) applyTool(Tool.BRUSH.id)
+        return
     }
-    ensureAiQueueDriver()
+    ui.errorRaw = null
+    ui.errorRes = null
+    if (ui.form == AiPanelForm.GENERATING || ui.activeTasks.isNotEmpty()) {
+        // 已有任务在跑: 这一批排队 (不做并发限制, 连按就是排多个), 结果累加到变体带
+        ui.queuedCount = ui.activeTasks.size
+    } else {
+        ui.form = AiPanelForm.GENERATING
+        ui.runningStep = 0
+        ui.queuedCount = 0
+    }
+    launchAiSubmission()
     // 提交后立刻把工具还给画笔 (P1-21: 画布立刻可画)。
     // 面板不消失 —— 靠 [aiUi.panelOpen] 继续挂着, 这正是非模态的形态 (原则 P4)。
     if (currentToolId == Tool.AI_IMAGE.id) applyTool(Tool.BRUSH.id)
 }
 
-/** ⟳ 再生成: 同提示词同参数换一批 */
+/** ⟳ 再生成: 同提示词同参数换一批 (丢弃上一批变体, 结果带被新一批替换) */
 internal fun PaintViewModel.regenerateAi() {
     val ui = aiUi
     ui.panelOpen = true
-    if (ui.driverJob?.isActive == true) {
-        // 已有任务在跑: 这一批排到它后面
-        ui.queuedCount += 1
-        return
+    if (!requireAiReady(ui)) return
+    ui.errorRaw = null
+    ui.errorRes = null
+    if (ui.activeTasks.isNotEmpty() || ui.pendingSubmissions > 0) {
+        // 已有任务在跑: 排到它后面
+        ui.queuedCount = ui.activeTasks.size + ui.pendingSubmissions
+    } else {
+        ui.variants.clear()
+        ui.selectedVariant = 0
+        ui.form = AiPanelForm.GENERATING
+        ui.runningStep = 0
+        ui.queuedCount = 0
     }
-    // 空闲态 (形态 C 点再生成走这里): 这一批就是第一个。
-    // **必须清零排队数** —— 上一批跑完后 queuedCount 已归零, 但若这里再去 +1,
-    // 驱动循环跑完一批会看到"队列里还有 1 个"而多跑一批, 用户看到的就是
-    // "正在生成 1 个 + 排队 1 个 = 2 个"。
-    ui.queuedCount = 0
-    ui.runningStep = 0
-    ui.form = AiPanelForm.GENERATING
-    ensureAiQueueDriver()
+    launchAiSubmission()
 }
 
 /**
- * 取消正在跑的任务。
+ * 取消正在跑的任务(s)。
  *
- * **只退出生成态, 不关面板** —— 面板留着让用户接着改提示词重试。
- * 已有变体就退回形态 C, 否则退回形态 A, 两种都保持 [AiUiState.panelOpen] 不变。
- *
- * TODO(生成链路): 接上真实请求后, 这里还要 `POST /interrupt` 让 ComfyUI 停掉远端任务。
- * 现在生成是假驱动 (ISSUES.md P12), 取消本地协程就够了。
+ * 真实取消: `POST /interrupt` 让 ComfyUI 停下远端执行, 关闭 WebSocket, 清本地任务表。
+ * **只退出生成态, 不关面板** —— 面板留着让用户接着改提示词重试; 已有变体退回形态 C。
  */
 internal fun PaintViewModel.cancelAiGeneration() {
     val ui = aiUi
+    abortAiSession(ui, interrupt = true)
     ui.driverJob?.cancel()
     ui.driverJob = null
-    ui.queuedCount = 0
-    ui.runningStep = 0
     ui.form = if (ui.variants.isNotEmpty()) AiPanelForm.RESULT else AiPanelForm.READY
     // 注意: 这里**不要**动 panelOpen。取消 ≠ 关闭。
 }
@@ -276,19 +339,25 @@ internal fun PaintViewModel.rerollAiSeed() {
 /** ✕ 放弃结果 / [×] 收起面板。**零痕迹**: 不产生撤销记录, 画布一帧都没变 */
 internal fun PaintViewModel.dismissAi() {
     val ui = aiUi
+    abortAiSession(ui, interrupt = true)
     ui.driverJob?.cancel()
     ui.driverJob = null
-    ui.queuedCount = 0
-    ui.runningStep = 0
+    ui.errorRaw = null
+    ui.errorRes = null
     // 只标记待清理, 不在这一帧改 form / 清变体 —— 否则退场动画会闪出就绪态 (见 sessionConsumed)
     ui.sessionConsumed = true
     ui.panelOpen = false
     if (currentToolId == Tool.AI_IMAGE.id) applyTool(Tool.BRUSH.id)
 }
 
-/** ✓ 应用: 形态 C 收工 (真实图层新增是 S2 的事, 一期先走通交互) */
+/**
+ * ✓ 应用: 形态 C 收工。
+ *
+ * 「应用成图层」是下一步的事, 本期只走完交互 (拿回工具、关闭面板)。
+ */
 internal fun PaintViewModel.applyAiResult() {
     val ui = aiUi
+    abortAiSession(ui, interrupt = true)
     ui.driverJob?.cancel()
     ui.driverJob = null
     // 同上: 直接淡出, 内容保持变体带, 不要"先退回就绪态再关闭"
@@ -310,39 +379,398 @@ internal fun PaintViewModel.onAiPanelBecameVisible() {
     ui.runningStep = 0
     ui.variants.clear()
     ui.selectedVariant = 0
+    ui.errorRaw = null
+    ui.errorRes = null
+}
+
+/**
+ * ViewModel 销毁时调用 (由 `PaintViewModel.onCleared` 转入)。
+ *
+ * 只做本地资源收尾 —— **不发 interrupt**: 销毁是进程级事件, 让远端把已排队的工作跑完
+ * 更符合预期; 用户主动「取消」才走 [abortAiSession] 的 interrupt 路径。
+ */
+internal fun PaintViewModel.shutdownAiComfy() {
+    val ui = aiUi
+    ui.sessionToken += 1
+    ui.activeTasks.clear()
+    ui.pendingSubmissions = 0
+    closeAiSocket(ui)
 }
 
 // ---------------------------------------------------------------------------
-// 假生成驱动 (S1: 不连网络)
+// 真实生成链路 (S2): 导出画布 → 上传 → 提交 → WebSocket 监听 → 取图
 // ---------------------------------------------------------------------------
 
-private fun PaintViewModel.ensureAiQueueDriver() {
+/**
+ * 发起一次提交。
+ *
+ * **会话 token**: 每次提交在开始时记下 [AiUiState.sessionToken], 之后每个挂起点都校验它 ——
+ * 取消/放弃会 +1, 于是所有在途提交自动作废, 不会在用户已经取消之后还往 UI 里塞结果。
+ * 这是「点取消却仍冒出结果」的唯一可靠防线。
+ *
+ * 线程: 网络/IO/编解码全部 [Dispatchers.IO] (由各自的实现保证), 引擎调用走 [runCore]
+ * (见 [ComfyCanvasExporter]), **绝不挂渲染线程**; 也绝不设置 `isBlockingLoading`。
+ */
+private fun PaintViewModel.launchAiSubmission() {
+    val vm = this
     val ui = aiUi
-    if (ui.driverJob?.isActive == true) return
-    ui.driverJob =
-        viewModelScope.launch {
-            try {
-                while (true) {
-                    val total = ui.totalSteps
-                    ui.form = AiPanelForm.GENERATING
-                    ui.runningStep = 0
-                    for (step in 1..total) {
-                        ui.runningStep = step
-                        delay(AI_FAKE_STEP_MS)
+    val token = ui.sessionToken
+    ui.pendingSubmissions += 1
+    viewModelScope.launch {
+        try {
+            val workflow =
+                vm.comfyWorkflows.current
+                    ?: run { vm.failLocal(ui, R.string.ai_error_no_workflow); return@launch }
+            val binding =
+                workflow.binding
+                    ?: run { vm.failLocal(ui, R.string.ai_error_workflow_unusable); return@launch }
+            val client =
+                vm.obtainComfyClient()
+                    ?: run { vm.failLocal(ui, R.string.ai_error_no_server); return@launch }
+            ui.activeClient = client
+            vm.ensureAiSocket(ui, client)
+
+            val rawJson =
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        ComfyWorkflowStore.readJson(vm.appContext, workflow.id)?.let { JSONObject(it) }
+                    }.getOrNull()
+                } ?: run { vm.failLocal(ui, R.string.ai_error_workflow_unusable); return@launch }
+            if (ui.sessionToken != token) return@launch
+
+            // 只有绑定了图片角色才导出画布并上传; 未绑定 = 纯文生图, 不上传
+            var imageName: String? = null
+            if (binding.base.image != null) {
+                when (val exported = ComfyCanvasExporter.export(vm)) {
+                    is CanvasExportResult.Ok -> {
+                        val upload =
+                            client.uploadImage(exported.bytes, ComfyCanvasExporter.UPLOAD_FILENAME)
+                        when (upload) {
+                            is ComfyCall.Ok -> imageName = upload.value.filename
+                            is ComfyCall.Fail -> {
+                                vm.failComfy(ui, upload, R.string.ai_error_upload_failed)
+                                return@launch
+                            }
+                        }
                     }
-                    // 一批结果到达: 面板切到形态 C (入口 E3 的"结果召回")
-                    ui.variants.clear()
-                    repeat(AI_FAKE_VARIANT_COUNT) { i -> ui.variants.add(AiUiVariant(i)) }
-                    ui.selectedVariant = 0
-                    ui.form = AiPanelForm.RESULT
-                    if (ui.queuedCount <= 0) return@launch
-                    ui.queuedCount -= 1
+                    else -> {
+                        vm.failLocal(ui, R.string.ai_error_export_failed)
+                        return@launch
+                    }
                 }
-            } finally {
-                ui.driverJob = null
+                if (ui.sessionToken != token) return@launch
+            }
+
+            val defaults = ComfyParamDefaultsReader.read(rawJson, binding)
+            // 显示用的总步数必须与**实际注入值**一致: 绑定了就以面板值为准 (用户可能刚改过),
+            // 未绑定才退回工作流值。此前无条件用 defaults (工作流值) 覆盖, 导致用户把步数
+            // 从 28 改成 8 后, 实际按 8 跑但进度条显示 28。
+            // 真值最终由 socket 的 progress.max 校正。
+            ui.totalSteps =
+                (if (binding.steps != null) ui.steps else defaults.steps ?: ui.steps).coerceAtLeast(1)
+            val params =
+                AiGenerationParams(
+                    prompt = ui.prompt,
+                    negativePrompt = ui.negativePrompt.takeIf { it.isNotBlank() },
+                    imageName = imageName,
+                    strength = ui.strengthPercent,
+                    steps = binding.steps?.let { ui.steps },
+                    cfg = binding.cfg?.let { ui.cfg },
+                    seed = binding.seed?.let { ui.seed },
+                )
+            val promptJson = ComfyPromptBuilder.build(rawJson, binding, params).toString()
+            val clientId = vm.ensureAiClientId(ui)
+
+            when (val submitted = client.submitPrompt(promptJson, clientId)) {
+                is ComfyCall.Ok -> {
+                    if (ui.sessionToken != token) return@launch
+                    ui.activeTasks[submitted.value] = AiTask(submitted.value, binding.base.outputNodeId)
+                    ui.queuedCount = (ui.activeTasks.size - 1).coerceAtLeast(0)
+                }
+                is ComfyCall.Fail -> vm.failComfy(ui, submitted, R.string.ai_error_submit_failed)
+            }
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            vm.failLocal(ui, R.string.ai_error_submit_failed)
+        } finally {
+            if (ui.sessionToken == token) {
+                if (ui.pendingSubmissions > 0) ui.pendingSubmissions -= 1
+                vm.maybeEndAiGeneration(ui)
             }
         }
+    }
 }
+
+/** Socket 事件入口 (已在主线程), 按 prompt_id / node 把结果归属到对应任务 */
+private fun PaintViewModel.handleAiSocketEvent(event: ComfySocketEvent) {
+    val ui = aiUi
+    when (event) {
+        is ComfySocketEvent.ExecutionStart -> ui.runningStep = 0
+
+        is ComfySocketEvent.Progress -> {
+            // 只有正在执行的那个 prompt 会推 progress; 不在任务表里的丢弃
+            if (event.promptId == null || ui.activeTasks.containsKey(event.promptId)) {
+                ui.totalSteps = event.max.coerceAtLeast(1)
+                ui.runningStep = event.value.coerceAtLeast(0)
+            }
+        }
+
+        is ComfySocketEvent.Executing -> {
+            // node == null: 该 prompt 执行结束。若已收到 executed 正在取图, 交给取图流程收尾
+            if (event.node == null) {
+                val task = findAiTask(ui, event.promptId, null)
+                if (task != null && !task.awaitingImages) finishAiTask(ui, task.promptId)
+            }
+        }
+
+        is ComfySocketEvent.Executed -> {
+            if (event.images.isEmpty()) return
+            val task = findAiTask(ui, event.promptId, event.node) ?: return
+            task.awaitingImages = true
+            fetchAiResults(task, event.images)
+        }
+
+        is ComfySocketEvent.ExecutionError -> {
+            val task = findAiTask(ui, event.promptId, null)
+            // 带了 prompt_id 却不属于本会话: 不是我们的错, 不认领也不打扰用户
+            if (task == null && event.promptId != null) return
+            // ComfyUI 原文, 不翻译不截断 —— 用户排查的唯一依据
+            ui.errorRaw = event.message.ifBlank { event.type }.ifBlank { null }
+            ui.errorRes = null
+            if (task != null) finishAiTask(ui, task.promptId) else maybeEndAiGeneration(ui)
+        }
+    }
+}
+
+/**
+ * 结果归属。
+ *
+ * 首选 `prompt_id` (ComfyUI 每条消息都带, 多任务下最可靠): **消息带了 prompt_id 就只看它**,
+ * 不在任务表里说明是别处的任务, 我们明确不认领 —— 这是「不串批」的关键。
+ * 只有消息没带 prompt_id 时, 才退回用产图节点 id 匹配 `outputNodeId`, 再退回唯一在跑的任务。
+ */
+private fun findAiTask(
+    ui: AiUiState,
+    promptId: String?,
+    node: String?,
+): AiTask? {
+    if (promptId != null) return ui.activeTasks[promptId]
+    return node?.let { n -> ui.activeTasks.values.firstOrNull { it.outputNodeId == n } }
+        ?: ui.activeTasks.values.firstOrNull()
+}
+
+/** 取图 → 解码 → 塞进变体条, 完成后收尾该任务 (网络与解码都在 IO) */
+private fun PaintViewModel.fetchAiResults(
+    task: AiTask,
+    refs: List<ComfyImageRef>,
+) {
+    val vm = this
+    val ui = aiUi
+    val token = ui.sessionToken
+    val client = ui.activeClient
+    viewModelScope.launch {
+        try {
+            for (ref in refs) {
+                if (ui.sessionToken != token) return@launch
+                if (client == null) break
+                when (val fetched = client.fetchImage(ref)) {
+                    is ComfyCall.Ok -> {
+                        val bitmap =
+                            withContext(Dispatchers.IO) {
+                                runCatching {
+                                    BitmapFactory.decodeByteArray(fetched.value, 0, fetched.value.size)
+                                }.getOrNull()
+                            }
+                        if (bitmap == null) {
+                            ui.errorRes = R.string.ai_error_decode_failed
+                        } else if (ui.sessionToken == token) {
+                            ui.variants.add(AiUiVariant(index = ui.variants.size, bitmap = bitmap))
+                        }
+                    }
+                    is ComfyCall.Fail -> ui.errorRes = R.string.ai_error_fetch_failed
+                }
+            }
+        } finally {
+            if (ui.sessionToken == token) vm.finishAiTask(ui, task.promptId)
+        }
+    }
+}
+
+/** 任务收尾: 移除任务, 刷新排队数, 可能结束整批 */
+private fun PaintViewModel.finishAiTask(
+    ui: AiUiState,
+    promptId: String,
+) {
+    if (ui.activeTasks.remove(promptId) == null) return
+    ui.queuedCount = (ui.activeTasks.size - 1).coerceAtLeast(0)
+    maybeEndAiGeneration(ui)
+}
+
+/**
+ * 所有任务与在途提交都结束后收尾: 退回形态 C (有变体) 或形态 A, 并关闭 WebSocket。
+ * 有任何一个条件不满足就原地不动 —— 绝不把还在跑的任务提前判死。
+ */
+private fun PaintViewModel.maybeEndAiGeneration(ui: AiUiState) {
+    if (ui.pendingSubmissions > 0 || ui.activeTasks.isNotEmpty()) return
+    ui.runningStep = 0
+    ui.form = if (ui.variants.isNotEmpty()) AiPanelForm.RESULT else AiPanelForm.READY
+    closeAiSocket(ui)
+}
+
+/** 连接失败 / 断开: 明确报错, 清任务, 绝不把任务永远吊在「生成中」 */
+private fun PaintViewModel.handleAiSocketFailure(
+    error: ComfyConnectionError,
+    detail: String?,
+) {
+    val ui = aiUi
+    ui.socket = null
+    if (ui.activeTasks.isEmpty() && ui.pendingSubmissions == 0) return
+    ui.sessionToken += 1
+    ui.activeTasks.clear()
+    ui.pendingSubmissions = 0
+    ui.queuedCount = 0
+    ui.runningStep = 0
+    ui.errorRes = errorResOf(error)
+    ui.errorRaw = null
+    ui.form = if (ui.variants.isNotEmpty()) AiPanelForm.RESULT else AiPanelForm.READY
+}
+
+/**
+ * 中止会话: 作废在途提交 (token +1), 清任务表, 关 WebSocket, 按需 `POST /interrupt`。
+ * 取消 / 放弃 / 应用 / 面板可见性清理都走这里, 行为一致。
+ */
+private fun PaintViewModel.abortAiSession(
+    ui: AiUiState,
+    interrupt: Boolean,
+) {
+    val hasTasks = ui.activeTasks.isNotEmpty()
+    val client = ui.activeClient
+    ui.sessionToken += 1
+    ui.activeTasks.clear()
+    ui.pendingSubmissions = 0
+    ui.queuedCount = 0
+    ui.runningStep = 0
+    closeAiSocket(ui)
+    if (interrupt && hasTasks && client != null) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { runCatching { client.interrupt() } }
+        }
+    }
+}
+
+private fun closeAiSocket(ui: AiUiState) {
+    ui.socket?.close()
+    ui.socket = null
+}
+
+// ---------------------------------------------------------------------------
+// 提交前置条件 / 连接材料 / 错误文案
+// ---------------------------------------------------------------------------
+
+/** 未配置或未导入时给出明确提示, 返回 false 表示不能提交 */
+private fun PaintViewModel.requireAiReady(ui: AiUiState): Boolean {
+    if (!hasAppContext()) return failLocal(ui, R.string.ai_error_not_ready)
+    if (comfyServer.baseUrl.isBlank()) return failLocal(ui, R.string.ai_error_no_server)
+    val workflow = comfyWorkflows.current ?: return failLocal(ui, R.string.ai_error_no_workflow)
+    if (workflow.binding == null) return failLocal(ui, R.string.ai_error_workflow_unusable)
+    return true
+}
+
+/** 用当前服务器配置建客户端; 地址非法 / 没配地址返回 null */
+private fun PaintViewModel.obtainComfyClient(): ComfyClient? {
+    if (!hasAppContext()) return null
+    val server = comfyServer
+    if (server.baseUrl.isBlank()) return null
+    val normalized = ComfyUrl.normalize(server.baseUrl)
+    if (normalized !is ComfyUrl.UrlResult.Ok) return null
+    val password =
+        when (server.authMode) {
+            ComfyAuthMode.BASIC -> ComfyCredentialStore.loadPassword(appContext)
+            else -> ""
+        }
+    val creds =
+        ComfyCredentials(
+            baseUrl = normalized.base,
+            username = if (server.authMode == ComfyAuthMode.BASIC) server.username else null,
+            password = if (server.authMode == ComfyAuthMode.BASIC) password.ifEmpty { null } else null,
+            extraHeaders =
+                if (server.authMode == ComfyAuthMode.CUSTOM_HEADER) {
+                    server.extraHeaders
+                        .filter { it.key.isNotBlank() }
+                        .associate { it.key.trim() to it.value }
+                } else {
+                    emptyMap()
+                },
+        )
+    return ComfyClient.create(creds, SyncHttp.client(server.trustSelfSigned))
+}
+
+/** 一个会话一个 clientId; 提交与 WebSocket 必须一致 */
+private fun PaintViewModel.ensureAiClientId(ui: AiUiState): String =
+    ui.clientId ?: UUID.randomUUID().toString().also { ui.clientId = it }
+
+/** 懒建 WebSocket, 已存在则复用 (多任务共享一条连接, 按 prompt_id 分流) */
+private fun PaintViewModel.ensureAiSocket(
+    ui: AiUiState,
+    client: ComfyClient,
+) {
+    if (ui.socket != null) return
+    val socket =
+        ComfySocket(
+            client = client,
+            clientId = ensureAiClientId(ui),
+            onEvent = { handleAiSocketEvent(it) },
+            onFailure = { error, detail -> handleAiSocketFailure(error, detail) },
+            onClosed = { handleAiSocketFailure(ComfyConnectionError.Unreachable, null) },
+        )
+    ui.socket = socket
+    socket.connect()
+}
+
+/** 本地失败: 把文案 res 记进状态, 返回 false 便于 `return failLocal(...)` */
+private fun PaintViewModel.failLocal(
+    ui: AiUiState,
+    res: Int,
+): Boolean {
+    ui.errorRes = res
+    ui.errorRaw = null
+    return false
+}
+
+/**
+ * 网络类失败: 服务端错误带原文就显示原文 (如节点校验的 node_errors), 否则按分类给文案。
+ * 这样 ComfyUI 的原始报错永远有机会露出来, 排查不至于被我们的翻译挡住。
+ */
+private fun PaintViewModel.failComfy(
+    ui: AiUiState,
+    fail: ComfyCall.Fail,
+    fallbackRes: Int,
+) {
+    when (val error = fail.error) {
+        is ComfyConnectionError.ServerError ->
+            if (!fail.detail.isNullOrBlank()) {
+                ui.errorRaw = fail.detail
+                ui.errorRes = null
+            } else {
+                ui.errorRes = fallbackRes
+                ui.errorRaw = null
+            }
+        else -> {
+            ui.errorRes = errorResOf(error)
+            ui.errorRaw = null
+        }
+    }
+}
+
+/** 把已分类的网络错误映射成面板文案 (复用服务器页已有的措辞, 不另造一套) */
+private fun errorResOf(error: ComfyConnectionError): Int =
+    when (error) {
+        ComfyConnectionError.AuthFailed -> R.string.comfy_status_auth_failed
+        ComfyConnectionError.AuthNotConfigured -> R.string.comfy_status_auth_not_configured
+        ComfyConnectionError.Unreachable -> R.string.comfy_status_unreachable
+        is ComfyConnectionError.ServerError -> R.string.ai_error_server
+    }
+
 
 // ---------------------------------------------------------------------------
 // 选区包围盒 (真实数据, 非假)
