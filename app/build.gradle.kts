@@ -218,4 +218,7 @@ dependencies {
     implementation("androidx.input:input-motionprediction:1.0.0")
 
     testImplementation("junit:junit:4.13.2")
+    // 仅单元测试用: 让 core/comfy 的 org.json 解析逻辑能在 JVM 上真跑
+    // (AGP 的 mockable android.jar 里 org.json 全部抛 "not mocked", 不加这条测试无法执行)
+    testImplementation("org.json:json:20250107")
 }
