@@ -18,8 +18,10 @@ class ComfyAutoBinderTest {
         return ComfyAutoBinder.bind(ok.rawPrompt, ok.workflow, hasReference)
     }
 
-    private fun contains(result: AutoBindResult, fragment: String) =
-        result.unresolved.any { it.contains(fragment) }
+    private fun AutoBindResult.has(key: BindNoteKey) = unresolved.any { it.key == key }
+
+    private fun AutoBindResult.argContains(fragment: String) =
+        unresolved.any { note -> note.args.any { it.contains(fragment) } }
 
     // ---------------- 真实工作流: ComfyUI 标准 txt2img ----------------
 
@@ -100,7 +102,7 @@ class ComfyAutoBinderTest {
     @Test
     fun `hasReference does not disturb a workflow that has no image input`() {
         val r = bind(standardTxt2img, hasReference = true)
-        assertTrue(contains(r, "没有图片输入节点"))
+        assertTrue(r.has(BindNoteKey.REFERENCE_WITHOUT_IMAGE_INPUT))
         assertEquals(ComfyBinding("6", "text"), r.prompt)
     }
 
@@ -140,7 +142,7 @@ class ComfyAutoBinderTest {
         assertEquals(ComfyBinding("5", "text"), r.prompt)
         assertEquals(ComfyBinding("6", "text"), r.negativePrompt)
         assertEquals("8", r.outputNodeId)
-        assertTrue("mask convention must be spelled out", contains(r, "蒙版输入按约定"))
+        assertTrue("mask convention must be spelled out", r.has(BindNoteKey.MASK_CONVENTION))
     }
 
     @Test
@@ -154,6 +156,21 @@ class ComfyAutoBinderTest {
         assertEquals(ComfyBinding("7", "denoise"), set.denoise)
         assertEquals("2", set.maskNodeId)
         assertEquals("7", set.samplerNodeId)
+    }
+
+    @Test
+    fun `editable round trip preserves every binding slot`() {
+        val r = bind(standardInpaint)
+        // 手动编辑走 EditableBindings 中转, 辅助绑定 (denoise / 蒙版 / 采样器) 不能丢
+        assertEquals(r.bindingSet(), r.toEditable().toBindingSet())
+    }
+
+    @Test
+    fun `editable sameRolesAs ignores auxiliary bindings but catches role edits`() {
+        val r = bind(standardInpaint)
+        val auto = r.toEditable()
+        assertTrue(auto.sameRolesAs(auto.copy(denoise = null)))
+        assertTrue(!auto.sameRolesAs(auto.copy(prompt = ComfyBinding("6", "text"))))
     }
 
     // ---------------- 真实工作流: img2img ----------------
@@ -184,7 +201,7 @@ class ComfyAutoBinderTest {
         assertEquals(ComfyBinding("1", "image"), r.imageInput)
         assertEquals(ComfyBinding("5", "denoise"), r.denoise)
         assertNull(r.maskNodeId)
-        assertTrue(contains(r, "只有一个图片输入"))
+        assertTrue(r.has(BindNoteKey.ONLY_ONE_IMAGE_INPUT))
     }
 
     // ---------------- 连线写法 ----------------
@@ -210,7 +227,7 @@ class ComfyAutoBinderTest {
         val r = bind(standardImg2img)
         assertEquals(ComfyBinding("4", "text"), r.prompt)
         assertNull(r.negativePrompt)
-        assertTrue(contains(r, "指向同一个节点"))
+        assertTrue(r.has(BindNoteKey.SAME_POSITIVE_NEGATIVE))
     }
 
     @Test
@@ -225,8 +242,8 @@ class ComfyAutoBinderTest {
         val r = bind(json)
         assertNull(r.prompt)
         assertEquals(ComfyBinding("2", "text"), r.negativePrompt)
-        assertTrue(contains(r, "positive"))
-        assertTrue(contains(r, "99"))
+        assertTrue(r.has(BindNoteKey.POSITIVE_TARGET_NOT_PROMPT))
+        assertTrue(r.argContains("99"))
         assertTrue(!r.isUsable)
         assertNull(r.bindingSet())
     }
@@ -242,7 +259,8 @@ class ComfyAutoBinderTest {
         """.trimIndent()
         val r = bind(json)
         assertEquals("3", r.outputNodeId)
-        assertTrue(contains(r, "指向的节点 42 不存在"))
+        assertTrue(r.has(BindNoteKey.OUTPUT_LINK_MISSING))
+        assertTrue(r.argContains("42"))
     }
 
     // ---------------- 没有采样器 / 没有可识别内容 ----------------
@@ -261,7 +279,7 @@ class ComfyAutoBinderTest {
         assertEquals(WorkflowKind.UNKNOWN, r.workflowKind)
         assertEquals(ComfyBinding("6", "text"), r.prompt)
         assertEquals("8", r.outputNodeId)
-        assertTrue(contains(r, "没有采样器节点"))
+        assertTrue(r.has(BindNoteKey.NO_SAMPLER))
         assertNull(r.negativePrompt)
     }
 
@@ -283,9 +301,9 @@ class ComfyAutoBinderTest {
         assertNull(r.imageInput)
         assertNull(r.outputNodeId)
         assertTrue("expected at least 3 notes, got ${r.unresolved}", r.unresolved.size >= 3)
-        assertTrue(contains(r, "没有采样器节点"))
-        assertTrue(contains(r, "没有找到可用的提示词节点"))
-        assertTrue(contains(r, "没找到输出节点"))
+        assertTrue(r.has(BindNoteKey.NO_SAMPLER))
+        assertTrue(r.has(BindNoteKey.NO_PROMPT_NODE))
+        assertTrue(r.has(BindNoteKey.NO_OUTPUT_NODE))
         assertTrue(!r.isUsable)
         assertNull(r.bindingSet())
     }
@@ -335,7 +353,7 @@ class ComfyAutoBinderTest {
         assertEquals(ComfyBinding("1", "image"), r.imageInput)
         assertNull(r.maskNodeId)
         assertEquals(WorkflowKind.IMG2IMG, r.workflowKind)
-        assertTrue(contains(r, "蒙版类模式不可用"))
+        assertTrue(r.has(BindNoteKey.ONLY_ONE_IMAGE_INPUT))
     }
 
     @Test
@@ -358,7 +376,7 @@ class ComfyAutoBinderTest {
               "2": {"class_type": "KSampler", "inputs": {"denoise": 0, "positive": ["1", 0]}}
             }
         """.trimIndent()
-        assertTrue(contains(bind(json), "denoise 为 0"))
+        assertTrue(bind(json).has(BindNoteKey.DENOISE_ZERO))
     }
 
     @Test
@@ -370,7 +388,7 @@ class ComfyAutoBinderTest {
               "3": {"class_type": "KSampler", "inputs": {"denoise": ["2", 0], "positive": ["1", 0]}}
             }
         """.trimIndent()
-        assertTrue(contains(bind(json), "denoise 不是字面量"))
+        assertTrue(bind(json).has(BindNoteKey.DENOISE_NOT_LITERAL))
     }
 
     // ---------------- SDXL 的 text_g / text_l ----------------

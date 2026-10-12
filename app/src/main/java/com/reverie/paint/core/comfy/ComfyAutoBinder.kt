@@ -17,7 +17,7 @@ internal enum class WorkflowKind { TXT2IMG, IMG2IMG, INPAINT, UNKNOWN }
  * @property imageInput 图片输入绑定 (LoadImage 的 image 字段)
  * @property outputNodeId 产图节点 id, 优先取 SaveImage / PreviewImage 的 images 连线生产节点
  * @property workflowKind 形态判定
- * @property unresolved 没识别出来的部分的中文说明
+ * @property unresolved 没识别出来的部分的**语义标记** (文案由 UI 层翻译)
  * @property denoise 改动幅度落到哪个字段。**纯文生图为 null** (txt2img 没有 denoise 语义)
  * @property maskNodeId 第二个图像输入节点 (蒙版), null 表示该预设不支持蒙版类模式
  * @property samplerNodeId 采样器节点 id, 用于写 seed
@@ -28,7 +28,7 @@ internal data class AutoBindResult(
     val imageInput: ComfyBinding?,
     val outputNodeId: String?,
     val workflowKind: WorkflowKind,
-    val unresolved: List<String> = emptyList(),
+    val unresolved: List<BindNote> = emptyList(),
     val denoise: ComfyBinding? = null,
     val maskNodeId: String? = null,
     val samplerNodeId: String? = null,
@@ -48,7 +48,29 @@ internal data class AutoBindResult(
             samplerNodeId = samplerNodeId,
         )
     }
+
+    /** 转成可编辑绑定 (四个角色取自动结果, 辅助绑定原样带过) */
+    fun toEditable(): EditableBindings = EditableBindings(
+        prompt = prompt,
+        negative = negativePrompt,
+        image = imageInput,
+        outputNodeId = outputNodeId,
+        denoise = denoise,
+        maskNodeId = maskNodeId,
+        samplerNodeId = samplerNodeId,
+    )
 }
+
+/** 已落盘绑定 → 可编辑绑定 (详情页用来回填当前值) */
+internal fun AiBindingSet.toEditable(): EditableBindings = EditableBindings(
+    prompt = base.prompt,
+    negative = negative,
+    image = base.image,
+    outputNodeId = base.outputNodeId,
+    denoise = denoise,
+    maskNodeId = maskNodeId,
+    samplerNodeId = samplerNodeId,
+)
 
 /**
  * 一份工作流的完整绑定。
@@ -114,7 +136,7 @@ internal object ComfyAutoBinder {
         workflow: ComfyWorkflow,
         hasReference: Boolean = false,
     ): AutoBindResult {
-        val notes = ArrayList<String>()
+        val notes = ArrayList<BindNote>()
         val byId = workflow.nodes.associateBy { it.id }
 
         // ---- ① 采样器: 带 denoise 字段的节点优先, 否则按已知 class_type ----
@@ -142,17 +164,16 @@ internal object ComfyAutoBinder {
         val imageInput = imageNode?.let { node ->
             val field = imageFieldOf(node)
             if (field == null) {
-                notes += "图片输入节点 ${node.id} 没有可写的图像字段"
+                notes += BindNote(BindNoteKey.IMAGE_NODE_NO_FIELD, listOf(node.id))
                 null
             } else {
                 ComfyBinding(nodeId = node.id, fieldName = field)
             }
         }
         if (maskNode != null) {
-            notes += "蒙版输入按约定取编号靠后的 LoadImage（${maskNode.id}），" +
-                "若与你的工作流不符请调整节点顺序"
+            notes += BindNote(BindNoteKey.MASK_CONVENTION, listOf(maskNode.id))
         } else if (imageNode != null) {
-            notes += "该预设只有一个图片输入，蒙版类模式不可用"
+            notes += BindNote(BindNoteKey.ONLY_ONE_IMAGE_INPUT)
         }
 
         val hasMaskInput = maskNode != null ||
@@ -167,18 +188,18 @@ internal object ComfyAutoBinder {
             else -> WorkflowKind.TXT2IMG
         }
         if (sampler == null) {
-            notes += "工作流里没有采样器节点，无法提交"
+            notes += BindNote(BindNoteKey.NO_SAMPLER)
         }
 
         val denoiseLiteral = samplerInputs?.let { literalDenoise(it) }
         if (imageNode != null && denoiseLiteral == null) {
-            notes += "采样器 ${sampler?.id} 的 denoise 不是字面量，改动幅度将被忽略"
+            notes += BindNote(BindNoteKey.DENOISE_NOT_LITERAL, listOf(sampler?.id ?: "?"))
         }
         if (denoiseLiteral != null && denoiseLiteral <= 0.0) {
-            notes += "采样器 ${sampler?.id} 的 denoise 为 0，采样结果会原样等于输入图"
+            notes += BindNote(BindNoteKey.DENOISE_ZERO, listOf(sampler?.id ?: "?"))
         }
         if (hasReference && imageNode == null) {
-            notes += "已选择参考图，但工作流里没有图片输入节点，图生图与局部重绘不可用"
+            notes += BindNote(BindNoteKey.REFERENCE_WITHOUT_IMAGE_INPUT)
         }
 
         // ---- ⑥ 改动幅度落点: 纯文生图没有 denoise 语义, 不绑定 ----
@@ -235,29 +256,38 @@ internal object ComfyAutoBinder {
         positiveRef: String?,
         negativeRef: String?,
         sampler: ComfyNode?,
-        notes: MutableList<String>,
+        notes: MutableList<BindNote>,
     ): PromptPair {
         val byId = workflow.nodes.associateBy { it.id }
 
         if (positiveRef != null || negativeRef != null) {
             // 正负指向同一个 CLIPTextEncode: 无法区分意图, 保留正向、放弃负面并说明
             if (positiveRef != null && positiveRef == negativeRef) {
-                notes += "正向与负面提示词指向同一个节点 $positiveRef，无法区分，将不注入负面提示词"
+                notes += BindNote(BindNoteKey.SAME_POSITIVE_NEGATIVE, listOf(positiveRef))
                 val kept = promptBindingOf(rawPrompt, byId[positiveRef])
                 if (kept == null) {
-                    notes += "采样器 ${sampler?.id} 的 positive 指向的节点 $positiveRef 不存在"
+                    notes += BindNote(
+                        BindNoteKey.POSITIVE_TARGET_MISSING,
+                        listOf(sampler?.id ?: "?", positiveRef),
+                    )
                 }
                 return PromptPair(prompt = kept, negative = null)
             }
             val prompt = if (positiveRef == null) null
             else promptBindingOf(rawPrompt, byId[positiveRef])
             if (positiveRef != null && prompt == null) {
-                notes += "采样器 ${sampler?.id} 的 positive 指向的节点 $positiveRef 无法用作提示词"
+                notes += BindNote(
+                    BindNoteKey.POSITIVE_TARGET_NOT_PROMPT,
+                    listOf(sampler?.id ?: "?", positiveRef),
+                )
             }
             val negative = if (negativeRef == null) null
             else promptBindingOf(rawPrompt, byId[negativeRef])
             if (negativeRef != null && negative == null) {
-                notes += "采样器 ${sampler?.id} 的 negative 指向的节点 $negativeRef 无法用作提示词"
+                notes += BindNote(
+                    BindNoteKey.NEGATIVE_TARGET_NOT_PROMPT,
+                    listOf(sampler?.id ?: "?", negativeRef),
+                )
             }
             return PromptPair(prompt, negative)
         }
@@ -267,7 +297,7 @@ internal object ComfyAutoBinder {
             node.classType == CLASS_TEXT_ENCODE && literalTextField(rawPrompt, node.id) != null
         }
         if (candidates.isEmpty()) {
-            notes += "没有找到可用的提示词节点"
+            notes += BindNote(BindNoteKey.NO_PROMPT_NODE)
             return PromptPair(null, null)
         }
         val negativeIds = workflow.nodes.mapNotNull { node ->
@@ -300,16 +330,16 @@ internal object ComfyAutoBinder {
         rawPrompt: JSONObject,
         byId: Map<String, ComfyNode>,
         outputNode: ComfyNode?,
-        notes: MutableList<String>,
+        notes: MutableList<BindNote>,
     ): String? {
         if (outputNode == null) {
-            notes += "没找到输出节点（$CLASS_SAVE_IMAGE 或 $CLASS_PREVIEW_IMAGE）"
+            notes += BindNote(BindNoteKey.NO_OUTPUT_NODE)
             return null
         }
         val link = linkTargetOf(inputsOf(rawPrompt, outputNode.id), FIELD_IMAGES)
             ?: return outputNode.id
         if (byId.containsKey(link)) return link
-        notes += "输出节点 ${outputNode.id} 的 images 指向的节点 $link 不存在，改用输出节点自身"
+        notes += BindNote(BindNoteKey.OUTPUT_LINK_MISSING, listOf(outputNode.id, link))
         return outputNode.id
     }
 

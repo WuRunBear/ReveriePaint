@@ -63,7 +63,11 @@ import com.reverie.paint.core.aiButtonLabel
 import com.reverie.paint.core.aiPanelVisible
 import com.reverie.paint.core.applyAiResult
 import com.reverie.paint.core.cancelAiGeneration
+import com.reverie.paint.core.cancelDeleteComfyWorkflow
 import com.reverie.paint.core.clearSelectionAction
+import com.reverie.paint.core.closeComfyWorkflowDetail
+import com.reverie.paint.core.closeComfyWorkflowImport
+import com.reverie.paint.core.confirmDeleteComfyWorkflow
 import com.reverie.paint.core.copyOrCutSelection
 import com.reverie.paint.core.dismissAi
 import com.reverie.paint.core.invertSelectionAction
@@ -147,6 +151,32 @@ fun AiGeneratePanel(
             }
         }
     }
+
+    // 工作流导入与删除对话框: 挂在面板可见性之外, 面板收起时也能完成导入 (导入不依赖服务器)
+    if (ui.form == AiPanelForm.READY || ui.form == AiPanelForm.GENERATING) {
+        if (vm.comfyWorkflows.importOpen) {
+            com.reverie.paint.ui.dialog.ComfyWorkflowImportDialog(
+                vm = vm,
+                onDismiss = { vm.closeComfyWorkflowImport() },
+            )
+        }
+        vm.comfyWorkflows.deleteTarget?.let { target ->
+            com.reverie.paint.ui.dialog.ComfyWorkflowDeleteDialog(
+                workflowName = target.name,
+                onConfirm = { vm.confirmDeleteComfyWorkflow() },
+                onDismiss = { vm.cancelDeleteComfyWorkflow() },
+            )
+        }
+    }
+
+    // 绑定详情: 不受形态限制, 结果待选时也能查看/改绑定
+    vm.comfyWorkflows.detailTarget?.let { target ->
+        com.reverie.paint.ui.dialog.ComfyWorkflowDetailDialog(
+            vm = vm,
+            workflow = target,
+            onDismiss = { vm.closeComfyWorkflowDetail() },
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -170,10 +200,17 @@ private fun AiPanelIntent(
 
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
         AiPanelHeader(vm = vm)
+        // 已导入工作流横条 (切换 / 导入 / 删除)。空态自带导入引导。
+        AiWorkflowStrip(vm = vm)
 
         // 未配置服务器时摆出生成控件只会让人点了没反应 —— 换成引导去配置的形态
         if (!generating && !vm.comfyServer.configured) {
             AiServerGuide(onOpenSettings = { vm.openMoreSettings("COMFY") })
+            return@Column
+        }
+
+        // 没有工作流时摆生成控件同样是"点了没反应": 引导在上面的横条里(空态文本 + 导入入口)
+        if (!generating && vm.comfyWorkflows.workflows.isEmpty()) {
             return@Column
         }
 
