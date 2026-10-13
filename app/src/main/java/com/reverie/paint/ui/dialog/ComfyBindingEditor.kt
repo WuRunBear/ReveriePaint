@@ -62,6 +62,7 @@ internal fun comfyRoleLabel(role: BindRole): String =
         BindRole.STEPS -> stringResource(R.string.comfy_bind_role_steps)
         BindRole.CFG -> stringResource(R.string.comfy_bind_role_cfg)
         BindRole.SEED -> stringResource(R.string.comfy_bind_role_seed)
+        BindRole.DENOISE -> stringResource(R.string.comfy_bind_role_denoise)
     }
 
 /** 识别提示的语义 key → 文案; **唯一的翻译接缝**, 加 key 时编译器会兜住漏的那支 */
@@ -184,6 +185,13 @@ internal fun ComfyBindingRows(
             fieldName = bindings.seed?.fieldName,
             onEdit = { onEditRole(BindRole.SEED) },
         )
+        BindingRow(
+            label = comfyRoleLabel(BindRole.DENOISE),
+            nodeId = bindings.denoise?.nodeId,
+            classType = bindings.denoise?.let { classById[it.nodeId] },
+            fieldName = bindings.denoise?.fieldName,
+            onEdit = { onEditRole(BindRole.DENOISE) },
+        )
 
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -278,7 +286,7 @@ private fun BindingRow(
  * 用户认的是 class_type)。点节点: 输出角色直接定下; 其余角色只有唯一候选字段时直接定下,
  * 多个则原地展开字段供选。顶部搜索框同时匹配 class_type 与字段名。
  *
- * [allowClear] 为 true (图片输入 / 负面提示词 / 步数 / CFG / 种子) 时提供「不使用」,
+ * [allowClear] 为 true (图片输入 / 负面提示词 / 步数 / CFG / 种子 / 改动幅度) 时提供「不使用」,
  * 支持这些角色不注入的合法情形。
  */
 @OptIn(ExperimentalLayoutApi::class)
@@ -525,6 +533,7 @@ private fun roleFieldMatches(
     BindRole.STEPS -> node.inputNames.filter { it.contains("step", true) }
     BindRole.CFG -> node.inputNames.filter { it.contains("cfg", true) }
     BindRole.SEED -> node.inputNames.filter { it.contains("seed", true) }
+    BindRole.DENOISE -> node.inputNames.filter { it.contains("denoise", true) }
     BindRole.OUTPUT -> emptyList()
 }
 
@@ -557,6 +566,7 @@ internal fun EditableBindings.withRole(
         BindRole.STEPS -> copy(steps = binding)
         BindRole.CFG -> copy(cfg = binding)
         BindRole.SEED -> copy(seed = binding)
+        BindRole.DENOISE -> copy(denoise = binding)
     }
 }
 
@@ -567,11 +577,12 @@ internal fun EditableBindings.clearRole(role: BindRole): EditableBindings = when
     BindRole.STEPS -> copy(steps = null)
     BindRole.CFG -> copy(cfg = null)
     BindRole.SEED -> copy(seed = null)
+    BindRole.DENOISE -> copy(denoise = null)
     BindRole.PROMPT, BindRole.OUTPUT -> this
 }
 
 /** 该角色是否允许「不使用」(可省略的绑定角色) */
 internal fun BindRole.isClearable(): Boolean = when (this) {
     BindRole.PROMPT, BindRole.OUTPUT -> false
-    BindRole.NEGATIVE, BindRole.IMAGE, BindRole.STEPS, BindRole.CFG, BindRole.SEED -> true
+    BindRole.NEGATIVE, BindRole.IMAGE, BindRole.STEPS, BindRole.CFG, BindRole.SEED, BindRole.DENOISE -> true
 }

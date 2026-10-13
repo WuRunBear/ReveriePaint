@@ -2360,6 +2360,7 @@
     <string name="ai_param_steps_unbound">Workflow has no sampler steps binding</string>
     <string name="ai_param_cfg_unbound">Workflow has no CFG binding</string>
     <string name="ai_param_seed_unbound">Workflow has no seed binding</string>
+    <string name="ai_param_strength_unbound">Workflow has no denoise binding</string>
     <string name="ai_param_bind_now">Bind</string>
     <string name="ai_sub_free_generate">Generate from your description alone</string>
     <string name="ai_sub_refine_canvas">Repaint from the current canvas</string>
@@ -2379,7 +2380,6 @@
     <string name="ai_source_reference">Reference</string>
     <string name="ai_strength">Strength</string>
     <string name="ai_strength_value">%1$d%%</string>
-    <string name="ai_strength_capsule">Strength %1$d%%</string>
     <string name="ai_selection_size">Selection %1$d×%2$d</string>
     <string name="ai_no_selection">No selection · whole canvas</string>
     <string name="ai_progress_steps">Step %1$d/%2$d</string>
@@ -2772,6 +2772,7 @@
     <string name="comfy_bind_role_steps">Steps</string>
     <string name="comfy_bind_role_cfg">CFG</string>
     <string name="comfy_bind_role_seed">Seed</string>
+    <string name="comfy_bind_role_denoise">Strength</string>
     <string name="comfy_bind_change">Change</string>
     <string name="comfy_bind_set">Set</string>
     <string name="comfy_bind_unset">Not set</string>

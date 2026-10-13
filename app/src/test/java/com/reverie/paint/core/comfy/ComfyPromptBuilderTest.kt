@@ -189,7 +189,7 @@ class ComfyPromptBuilderTest {
         val cases = mapOf(0 to 0.0, 1 to 0.01, 30 to 0.30, 62 to 0.62, 100 to 1.0, 250 to 1.0, -9 to 0.0)
         cases.forEach { (strength, expected) ->
             val params = AiGenerationParams(prompt = "x", strength = strength)
-            assertEquals(expected, params.denoise, 1e-9)
+            assertEquals(expected, params.denoise!!, 1e-9)
             val out = built(params)
             assertEquals(
                 "strength=$strength",
@@ -198,6 +198,13 @@ class ComfyPromptBuilderTest {
                 1e-9,
             )
         }
+    }
+
+    @Test
+    fun `strength 为 null 时不注入 denoise，工作流原值保持不变`() {
+        val out = built(AiGenerationParams(prompt = "x"))
+        // 模板里 KSampler.denoise 是 0.75, 未设置 strength 时不得被覆写
+        assertEquals(0.75, (ComfyPromptBuilder.valueAt(out, "7.inputs.denoise") as Number).toDouble(), 1e-9)
     }
 
     @Test
@@ -222,21 +229,27 @@ class ComfyPromptBuilderTest {
         assertEquals(1.0, out.getJSONObject("3").getJSONObject("inputs").getDouble("denoise"), 1e-9)
     }
 
-    // ---------------- 三字段绑定的重载 ----------------
+    // ---------------- denoise 走绑定注入 (与 steps/cfg/seed 同一路径) ----------------
 
     @Test
-    fun `the ComfyBindings overload still writes denoise and prompt`() {
-        val raw = parsed().rawPrompt
-        val set = bindingSet()
+    fun `a denoise binding writes denoise while unbound roles keep their template value`() {
+        val ok = parsed()
+        // 只留 denoise 角色 (去掉负面提示词), 模拟"只绑定了改动幅度"的调用方
+        val set = bindingSet().copy(negative = null)
         val out = ComfyPromptBuilder.build(
-            raw,
-            set.base,
-            AiGenerationParams(prompt = "short path", negativePrompt = "ignored", imageName = "ignored.png"),
+            ok.rawPrompt,
+            set,
+            AiGenerationParams(
+                prompt = "short path",
+                negativePrompt = "ignored",
+                imageName = "ignored.png",
+                strength = 80,
+            ),
         )
         assertEquals("short path", ComfyPromptBuilder.valueAt(out, "5.inputs.text"))
-        // denoise 落点由 findDenoiseBinding 现查, 仍然写进采样器
-        assertEquals(1.0, (ComfyPromptBuilder.valueAt(out, "7.inputs.denoise") as Number).toDouble(), 1e-9)
-        // 只有三字段的绑定写不了负面提示词, 原值保持不变
+        // denoise 落点来自绑定, 不再在提交时现查
+        assertEquals(0.8, (ComfyPromptBuilder.valueAt(out, "7.inputs.denoise") as Number).toDouble(), 1e-9)
+        // 未绑定的负面提示词原值保持不变
         assertEquals("old negative", ComfyPromptBuilder.valueAt(out, "6.inputs.text"))
         assertEquals("ignored.png", ComfyPromptBuilder.valueAt(out, "1.inputs.image"))
     }

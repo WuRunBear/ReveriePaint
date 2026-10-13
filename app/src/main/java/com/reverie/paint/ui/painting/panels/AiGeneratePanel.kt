@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.reverie.paint.R
+import com.reverie.paint.core.AI_DEFAULT_STRENGTH
 import com.reverie.paint.core.AiPanelForm
 import com.reverie.paint.core.AiUiVariant
 import com.reverie.paint.core.PaintViewModel
@@ -317,7 +318,6 @@ private fun AiPanelIntent(
                     selected = ui.sourceKind,
                     onSelect = { ui.sourceKind = it },
                 )
-                AiStrengthCapsule(vm = vm)
                 Spacer(Modifier.weight(1f))
                 ToolActionButton(
                     iconRes = R.drawable.ic_settings,
@@ -685,52 +685,6 @@ private fun AiProgressRow(
     }
 }
 
-/**
- * 改动幅度胶囊: 默认收起只露一个胶囊, 点开才是滑杆。
- *
- * 这是**唯一常驻的数值参数** (原则 P6: 暴露 denoising strength, 不暴露 sampler/CFG/VAE)。
- * 滑杆复用 `ToolFloatSlider` —— 它内建数字键盘精确输入, 画家要的就是"我要 62%, 不是 60%"。
- */
-@Composable
-private fun AiStrengthCapsule(
-    vm: PaintViewModel,
-) {
-    val ui = vm.aiUi
-    var pending by remember(ui.strengthPercent) { mutableFloatStateOf(-1f) }
-
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        ToolFloatChip(
-            label = stringResource(R.string.ai_strength_capsule, ui.strengthPercent),
-            selected = ui.strengthExpanded,
-            onClick = { ui.strengthExpanded = !ui.strengthExpanded },
-        )
-        AnimatedVisibility(
-            visible = ui.strengthExpanded,
-            enter = fadeIn(Motion.enterSpring()) + scaleIn(Motion.enterSpring(), initialScale = 0.9f),
-            exit = fadeOut(Motion.exitTween(120)) + scaleOut(Motion.exitTween(120), targetScale = 0.9f),
-        ) {
-            ToolFloatSlider(
-                label = stringResource(R.string.ai_strength),
-                valueText = stringResource(R.string.ai_strength_value, ui.strengthPercent),
-                range = 0f..100f,
-                value = if (pending >= 0f) pending else ui.strengthPercent.toFloat(),
-                onValue = { pending = it },
-                onRelease = {
-                    if (pending >= 0f) {
-                        ui.strengthPercent = pending.toInt().coerceIn(0, 100)
-                        pending = -1f
-                    }
-                },
-                labelWidth = 52.dp,
-                modifier = Modifier.width(190.dp),
-            )
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // ⚙ 参数抽屉
 // ---------------------------------------------------------------------------
@@ -761,6 +715,9 @@ private fun AiAdvancedDrawer(
         }
     var pendingSteps by remember(ui.steps) { mutableFloatStateOf(-1f) }
     var pendingCfg by remember(ui.cfg) { mutableFloatStateOf(-1f) }
+    var pendingStrength by remember(ui.strengthPercent) { mutableFloatStateOf(-1f) }
+    // 未调整 (null) 时滑杆与禁用态都展示默认值, 但提交时仍不注入 —— 见 PaintViewModelComfyUi
+    val strengthValue = ui.strengthPercent ?: AI_DEFAULT_STRENGTH
 
     Column(
         modifier = modifier
@@ -834,6 +791,30 @@ private fun AiAdvancedDrawer(
                 label = stringResource(R.string.ai_param_cfg),
                 value = ui.cfg.roundToInt().toString(),
                 hint = stringResource(R.string.ai_param_cfg_unbound),
+                onBind = onBind,
+            )
+        }
+        if (bindings?.denoise != null) {
+            ToolFloatSlider(
+                label = stringResource(R.string.ai_strength),
+                valueText = stringResource(R.string.ai_strength_value, strengthValue),
+                range = 0f..100f,
+                value = if (pendingStrength >= 0f) pendingStrength else strengthValue.toFloat(),
+                onValue = { pendingStrength = it },
+                onRelease = {
+                    if (pendingStrength >= 0f) {
+                        ui.strengthPercent = pendingStrength.toInt().coerceIn(0, 100)
+                        pendingStrength = -1f
+                    }
+                },
+                labelWidth = 44.dp,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            AiUnboundParam(
+                label = stringResource(R.string.ai_strength),
+                value = stringResource(R.string.ai_strength_value, strengthValue),
+                hint = stringResource(R.string.ai_param_strength_unbound),
                 onBind = onBind,
             )
         }

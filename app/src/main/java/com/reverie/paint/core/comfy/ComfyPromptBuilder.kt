@@ -10,7 +10,8 @@ import org.json.JSONObject
  *   (无条件嵌入, 画面完全由输入图与选区边缘决定), 而不是保留模板里的原提示词
  * @property negativePrompt 负面提示词; null 表示不注入, 模板里原有的值原样保留
  * @property imageName `/upload/image` 返回的文件名; null 表示不注入
- * @property strength 改动幅度 0..100, 换算成 `KSampler.denoise = strength / 100`
+ * @property strength 改动幅度 0..100, 换算成 `KSampler.denoise = strength / 100`;
+ *   null 表示不注入 (沿用模板里的值), 与 steps / cfg / seed 相同语义
  * @property steps 采样步数; null 表示不注入 (沿用模板里的值)
  * @property cfg 提示词引导强度; null 表示不注入 (沿用模板里的值)
  * @property seed 随机种子; null 表示不注入 (沿用模板里的值), 走 SEED 角色绑定
@@ -19,13 +20,13 @@ internal data class AiGenerationParams(
     val prompt: String,
     val negativePrompt: String? = null,
     val imageName: String? = null,
-    val strength: Int = 100,
+    val strength: Int? = null,
     val steps: Int? = null,
     val cfg: Float? = null,
     val seed: Long? = null,
 ) {
-    /** 改动幅度 → denoise, 0..100 归一化到 0.0..1.0 */
-    val denoise: Double get() = strength.coerceIn(0, 100) / 100.0
+    /** 改动幅度 → denoise, 0..100 归一化到 0.0..1.0; strength 未设置时返回 null (不注入) */
+    val denoise: Double? get() = strength?.let { it.coerceIn(0, 100) / 100.0 }
 }
 
 /**
@@ -42,20 +43,6 @@ internal object ComfyPromptBuilder {
 
     private const val SEPARATOR = '.'
     private const val INPUTS = "inputs"
-
-    /** 只有三字段绑定的调用方走这里, denoise 落点按 [ComfyAutoBinder.findDenoiseBinding] 现查 */
-    fun build(
-        rawWorkflow: JSONObject,
-        bindings: ComfyBindings,
-        params: AiGenerationParams,
-    ): JSONObject = build(
-        rawWorkflow = rawWorkflow,
-        bindingSet = AiBindingSet(
-            base = bindings,
-            denoise = ComfyAutoBinder.findDenoiseBinding(rawWorkflow),
-        ),
-        params = params,
-    )
 
     fun build(
         rawWorkflow: JSONObject,
@@ -76,7 +63,7 @@ internal object ComfyPromptBuilder {
         }
 
         bindingSet.denoise?.let { binding ->
-            put(out, pathOf(binding), params.denoise)
+            params.denoise?.let { put(out, pathOf(binding), it) }
         }
 
         // 采样参数走绑定: 未绑定 / 参数为 null 都不注入, 保持工作流原值

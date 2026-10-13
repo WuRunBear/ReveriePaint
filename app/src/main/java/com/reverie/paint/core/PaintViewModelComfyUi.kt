@@ -69,6 +69,9 @@ internal data class AiUiVariant(
 /** 一批生成的步数默认值 —— 真实生成时由工作流步数 / ComfyUI progress 消息覆盖 */
 internal const val AI_DEFAULT_STEPS = 28
 
+/** 改动幅度未调整时滑杆与未绑定态展示用的默认值 —— 仅作显示, 不代表会注入工作流 */
+internal const val AI_DEFAULT_STRENGTH = 62
+
 /**
  * AI 面板的全部 UI 状态。
  *
@@ -100,15 +103,13 @@ internal class AiUiState {
     var sourceKind by mutableStateOf(AiSourceKind.SELECTION)
 
     /**
-     * 改动幅度 0..100。
+     * 改动幅度 0..100。**null 表示用户尚未调整** —— 提交时不注入 `KSampler.denoise`,
+     * 沿用工作流自带的值 (与 steps/cfg/seed 的「不拖就不覆写」同一语义)。
      *
      * **不参与按钮判定**, 只喂 `KSampler.denoise` —— 见 [AiButtonResolver] 的 KDoc。
      * 这是"连着管线语义"的反面教材, 已在单测里钉死。
      */
-    var strengthPercent by mutableIntStateOf(62)
-
-    /** 改动幅度胶囊是否展开为滑杆 (默认收起, 只露一个胶囊) */
-    var strengthExpanded by mutableStateOf(false)
+    var strengthPercent by mutableStateOf<Int?>(null)
 
     // ---- ⚙ 抽屉: 藏起来的是复杂度, 不是能力 (原则 P7) ----
 
@@ -251,7 +252,7 @@ internal fun PaintViewModel.aiButtonLabel(): AiButtonLabel =
         AiContext(
             hasSelection = hasSelection,
             sourceKind = aiUi.sourceKind,
-            strengthPercent = aiUi.strengthPercent,
+            strengthPercent = aiUi.strengthPercent ?: AI_DEFAULT_STRENGTH,
             mode = aiUi.mode,
         ),
     )

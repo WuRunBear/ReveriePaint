@@ -18,7 +18,8 @@ internal enum class WorkflowKind { TXT2IMG, IMG2IMG, INPAINT, UNKNOWN }
  * @property outputNodeId 产图节点 id, 优先取 SaveImage / PreviewImage 的 images 连线生产节点
  * @property workflowKind 形态判定
  * @property unresolved 没识别出来的部分的**语义标记** (文案由 UI 层翻译)
- * @property denoise 改动幅度落到哪个字段。**纯文生图为 null** (txt2img 没有 denoise 语义)
+ * @property denoise 改动幅度落到哪个字段 (采样器的 `denoise`); 采样器不带该字段时为 null,
+ *   用户可在绑定界面手动指定 —— 与 [steps] / [cfg] / [seed] 同为**正式可绑定角色**
  * @property steps 采样步数落到哪个字段, null 表示没识别到
  * @property cfg 引导强度落到哪个字段, null 表示没识别到
  * @property seed 随机种子落到哪个字段 (KSampler 的 `seed` / KSamplerAdvanced 的 `noise_seed`),
@@ -59,7 +60,7 @@ internal data class AutoBindResult(
         )
     }
 
-    /** 转成可编辑绑定 (各角色取自动结果, 辅助绑定原样带过) */
+    /** 转成可编辑绑定 (各角色取自动结果, 蒙版 / 采样器原样带过) */
     fun toEditable(): EditableBindings = EditableBindings(
         prompt = prompt,
         negative = negativePrompt,
@@ -252,25 +253,6 @@ internal object ComfyAutoBinder {
         )
     }
 
-    /**
-     * 找出承载 `denoise` 的节点。
-     *
-     * 单独暴露给 [ComfyPromptBuilder]: 只拿到 [ComfyBindings] 三字段的调用方拿不到
-     * denoise 落点, 由它按同一条规则现查, 避免两处规则漂移。
-     */
-    fun findDenoiseBinding(rawPrompt: JSONObject): ComfyBinding? {
-        val keys = rawPrompt.keys()
-        while (keys.hasNext()) {
-            val id = keys.next()
-            val node = rawPrompt.optJSONObject(id) ?: continue
-            val classType = node.optString("class_type")
-            if (classType in SAMPLER_CLASSES && FIELD_DENOISE in inputNamesOf(node)) {
-                return ComfyBinding(nodeId = id, fieldName = FIELD_DENOISE)
-            }
-        }
-        return null
-    }
-
     // ---------------------------------------------------------------- 内部
 
     private data class PromptPair(val prompt: ComfyBinding?, val negative: ComfyBinding?)
@@ -428,11 +410,6 @@ internal object ComfyAutoBinder {
 
     private fun inputsOf(rawPrompt: JSONObject, nodeId: String): JSONObject? =
         rawPrompt.optJSONObject(nodeId)?.optJSONObject("inputs")
-
-    private fun inputNamesOf(node: JSONObject): List<String> {
-        val inputs = node.optJSONObject("inputs") ?: return emptyList()
-        return inputs.keys().asSequence().toList().sorted()
-    }
 
     /**
      * 读取连线目标节点 id。

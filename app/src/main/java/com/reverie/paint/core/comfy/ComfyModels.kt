@@ -33,7 +33,7 @@ internal data class ComfyBindings(
 )
 
 /** 绑定角色: 用户在绑定行里能手动指定的各项 */
-internal enum class BindRole { PROMPT, NEGATIVE, IMAGE, OUTPUT, STEPS, CFG, SEED }
+internal enum class BindRole { PROMPT, NEGATIVE, IMAGE, OUTPUT, STEPS, CFG, SEED, DENOISE }
 
 /**
  * 自动绑定未识别 / 需提醒的事项。
@@ -101,10 +101,10 @@ internal data class BindNote(
 )
 
 /**
- * 用户可手动编辑的角色 + 自动推导出的辅助绑定 (denoise / 蒙版 / 采样器)。
+ * 用户可手动编辑的角色 + 自动推导出的辅助绑定 (蒙版 / 采样器)。
  *
- * 用户能改的是各个角色 (提示词 / 负面 / 图片 / 输出 / 步数 / CFG / 种子);
- * [denoise] / [maskNodeId] / [samplerNodeId] 随自动结果原样带过, 保存时一并落盘
+ * 用户能改的是各个角色 (提示词 / 负面 / 图片 / 输出 / 步数 / CFG / 种子 / 改动幅度);
+ * [maskNodeId] / [samplerNodeId] 随自动结果原样带过, 保存时一并落盘
  * —— 生成链路读的就是 [toBindingSet] 的产物。
  */
 internal data class EditableBindings(
@@ -146,5 +146,6 @@ internal data class EditableBindings(
             outputNodeId == other.outputNodeId &&
             steps == other.steps &&
             cfg == other.cfg &&
-            seed == other.seed
+            seed == other.seed &&
+            denoise == other.denoise
 }

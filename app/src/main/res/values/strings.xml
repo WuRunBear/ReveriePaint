@@ -2360,6 +2360,7 @@
     <string name="ai_param_steps_unbound">工作流未绑定采样器步数</string>
     <string name="ai_param_cfg_unbound">工作流未绑定 CFG</string>
     <string name="ai_param_seed_unbound">工作流未绑定随机种子</string>
+    <string name="ai_param_strength_unbound">工作流未绑定改动幅度</string>
     <string name="ai_param_bind_now">去绑定</string>
     <string name="ai_sub_free_generate">从你的描述凭空生成</string>
     <string name="ai_sub_refine_canvas">以当前画面为底重绘</string>
@@ -2379,7 +2380,6 @@
     <string name="ai_source_reference">参考图</string>
     <string name="ai_strength">改动幅度</string>
     <string name="ai_strength_value">%1$d%%</string>
-    <string name="ai_strength_capsule">改动幅度 %1$d%%</string>
     <string name="ai_selection_size">选区 %1$d×%2$d</string>
     <string name="ai_no_selection">没有选区 · 整个画布</string>
     <string name="ai_progress_steps">第 %1$d/%2$d 步</string>
@@ -2772,6 +2772,7 @@
     <string name="comfy_bind_role_steps">采样步数</string>
     <string name="comfy_bind_role_cfg">引导强度</string>
     <string name="comfy_bind_role_seed">随机种子</string>
+    <string name="comfy_bind_role_denoise">改动幅度</string>
     <string name="comfy_bind_change">更改</string>
     <string name="comfy_bind_set">设置</string>
     <string name="comfy_bind_unset">未设置</string>

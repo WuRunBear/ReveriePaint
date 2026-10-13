@@ -1,6 +1,5 @@
 package com.reverie.paint.core.comfy
 
-import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -230,16 +229,19 @@ class ComfyAutoBinderTest {
     @Test
     fun `editable round trip preserves every binding slot`() {
         val r = bind(standardInpaint)
-        // 手动编辑走 EditableBindings 中转, 辅助绑定 (denoise / 蒙版 / 采样器) 不能丢
+        // 手动编辑走 EditableBindings 中转, 全部角色与辅助绑定 (蒙版 / 采样器) 都不能丢
         assertEquals(r.bindingSet(), r.toEditable().toBindingSet())
     }
 
     @Test
-    fun `editable sameRolesAs ignores auxiliary bindings but catches role edits`() {
+    fun `editable sameRolesAs catches every role edit including denoise`() {
         val r = bind(standardInpaint)
         val auto = r.toEditable()
-        assertTrue(auto.sameRolesAs(auto.copy(denoise = null)))
+        // 改动幅度已是正式角色: 手动改它必须被判定为"改过"
+        assertTrue(!auto.sameRolesAs(auto.copy(denoise = null)))
         assertTrue(!auto.sameRolesAs(auto.copy(prompt = ComfyBinding("6", "text"))))
+        // 蒙版 / 采样器仍是辅助绑定, 不参与角色比较
+        assertTrue(auto.sameRolesAs(auto.copy(maskNodeId = null, samplerNodeId = null)))
     }
 
     // ---------------- 真实工作流: img2img ----------------
@@ -477,17 +479,25 @@ class ComfyAutoBinderTest {
         assertEquals(ComfyBinding("3", "text_g"), r.negativePrompt)
     }
 
-    // ---------------- findDenoiseBinding ----------------
+    // ---------------- denoise 落点 (正式角色, 与 steps/cfg/seed 同源) ----------------
 
     @Test
-    fun `findDenoiseBinding locates the sampler denoise field`() {
-        val raw = parse(standardInpaint).rawPrompt
-        assertEquals(ComfyBinding("7", "denoise"), ComfyAutoBinder.findDenoiseBinding(raw))
+    fun `denoise lands in the binding set so it can be overridden by hand`() {
+        val r = bind(standardInpaint)
+        assertEquals(ComfyBinding("7", "denoise"), r.denoise)
+        assertEquals(ComfyBinding("7", "denoise"), r.bindingSet()?.denoise)
+        assertEquals(ComfyBinding("7", "denoise"), r.toEditable().denoise)
     }
 
     @Test
-    fun `findDenoiseBinding returns null when no sampler carries denoise`() {
-        val json = """{"1": {"class_type": "CLIPTextEncode", "inputs": {"text": "p"}}}"""
-        assertNull(ComfyAutoBinder.findDenoiseBinding(JSONObject(json)))
+    fun `denoise is unbound when no sampler carries the field`() {
+        val json = """
+            {
+              "1": {"class_type": "CLIPTextEncode", "inputs": {"text": "p"}},
+              "2": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]}}
+            }
+        """.trimIndent()
+        assertNull(bind(json).denoise)
+        assertNull(bind(json).bindingSet()?.denoise)
     }
 }
