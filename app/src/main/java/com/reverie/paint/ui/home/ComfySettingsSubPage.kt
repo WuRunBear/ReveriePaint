@@ -56,6 +56,7 @@ import com.reverie.paint.core.removeComfyHeaderRow
 import com.reverie.paint.core.setComfyTrustSelfSigned
 import com.reverie.paint.core.testComfyConnection
 import com.reverie.paint.ui.components.pressScale
+import com.reverie.paint.ui.painting.TextInputGuard
 import com.reverie.paint.ui.theme.Theme
 
 /**
@@ -71,6 +72,8 @@ internal fun ComfySettingsSubPage(
     compact: Boolean = false,
     onBack: () -> Unit,
 ) {
+    // 服务器地址/请求头输入框需挂守卫, 避免从画布进入本页时退格被全局快捷键吞掉
+    TextInputGuard(vm)
     val colors = Theme.current
     val server = vm.comfyServer
 

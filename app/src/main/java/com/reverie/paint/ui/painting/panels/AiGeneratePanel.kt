@@ -92,6 +92,7 @@ import com.reverie.paint.core.comfy.AiGenerateMode
 import com.reverie.paint.core.comfy.AiSourceKind
 import com.reverie.paint.model.Tool
 import com.reverie.paint.ui.components.noRippleClickable
+import com.reverie.paint.ui.painting.TextInputGuard
 import com.reverie.paint.ui.theme.Morandi
 import com.reverie.paint.ui.theme.Motion
 import dev.chrisbanes.haze.HazeState
@@ -249,6 +250,8 @@ private fun AiPanelIntent(
     vm: PaintViewModel,
     generating: Boolean,
 ) {
+    // 面板含提示词/负面词输入框, 需挂守卫让退格/删除键不被全局快捷键吞掉
+    TextInputGuard(vm)
     val ui = vm.aiUi
     val label = vm.aiButtonLabel()
 
