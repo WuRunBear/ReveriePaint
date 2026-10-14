@@ -159,6 +159,16 @@ private val shapeTools =
 private val AI_PANEL_SHELL_PADDING = 24.dp
 
 /**
+ * AI 面板的**定宽** (内容区, 不含 ToolFloatPanel 外壳内边距)。
+ *
+ * 之前是"屏宽 − 工具栏 − 外壳", 等于把工具栏右边剩下的地板整块铺满: 竖屏手机上还好,
+ * 平板/横屏/折叠屏展开态就摊成一条横贯全屏的横幅, 既挡画布又让一行文字拉得太散。
+ * 400.dp ≈ 竖屏手机能放下的上限 (再宽单行提示词行长反而不好扫读), 宽屏上就定在这个数。
+ * 屏宽不够时退化成"可用空间"而不是溢出 —— 见调用点的 `coerceIn`。
+ */
+private val AI_PANEL_PREFERRED_WIDTH = 400.dp
+
+/**
  * Painting page: full-bleed canvas with touch painting + gestures,
  * overlaid by the top bar, left tool rail and popup panels.
  *
@@ -1891,21 +1901,26 @@ fun PaintingPage(
         // 可见条件由面板自己算: 选了 AI 工具, 或有进行中的 AI 会话 (入口 E1/E2/E3)。
         // 选区浮层的条件是 `tool in selectionTools`, 切到 AI 工具后它自动让路, 无需改动。
         //
-        // 宽度: 比别家底栏多让开左侧工具栏 (ToolRail zIndex 50, 会盖住面板)。别的底栏
-        // 被盖住只是难看, AI 面板被盖住的是**生成方式/取材两个下拉** —— 直接点不到。
-        // 做法: 宽度 = 屏宽 − 工具栏, 再整体右移半个工具栏宽, 于是它在"剩下的地板"里居中。
+        // 宽度: **定宽 + 居中**。之前是"屏宽 − 工具栏"整块铺满, 宽屏上摊成横幅太碍事。
+        // 现在内容区封顶 [AI_PANEL_PREFERRED_WIDTH], 屏幕不够宽时退化成
+        // "屏宽 − 工具栏 − 外壳" —— 这是**地板宽度**, 宁可内容折行也不让它溢出被裁。
+        //
+        // 居中: `BottomCenter` + 半个工具栏位移 `railShift` 就够了 —— 面板中心恒等于
+        // "扣掉工具栏后的地板"的中心, 与面板宽度无关, 所以定宽之后这里一行都不用动。
+        // 左侧/右侧工具栏由 `leftHandMode` 翻转, 位移也跟着翻, 让位逻辑原样保留。
         androidx.compose.foundation.layout.BoxWithConstraints(
             modifier = Modifier.fillMaxSize(),
         ) {
             val railDp = 56.dp
             val panelDensity = LocalDensity.current
             val railShift = with(panelDensity) { railDp.toPx() / 2f } * if (vm.leftHandMode) -1f else 1f
+            val availableWidth = maxWidth - railDp - AI_PANEL_SHELL_PADDING
             AiGeneratePanel(
                 vm = vm,
                 tool = tool,
                 hazeState = hazeState,
                 dragBounds = androidx.compose.ui.geometry.Rect(0f, 0f, maxWidth.value, maxHeight.value),
-                maxContentWidth = maxWidth - railDp - AI_PANEL_SHELL_PADDING,
+                maxContentWidth = availableWidth.coerceIn(0.dp, AI_PANEL_PREFERRED_WIDTH),
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .offset { IntOffset(railShift.roundToInt(), 0) }

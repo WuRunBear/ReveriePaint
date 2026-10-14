@@ -6,6 +6,7 @@ package com.reverie.paint.ui.painting.panels
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -16,6 +17,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -32,6 +34,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
@@ -61,6 +64,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.reverie.paint.R
@@ -110,14 +114,19 @@ import kotlin.math.roundToInt
  * 三个形态:
  * - [AiPanelForm.READY]      A 就绪: 意图输入 + 选区操作 + 主按钮
  * - [AiPanelForm.GENERATING] B 生成中: **面板不消失, 画布不锁**。进度 / 排队位次 / 取消
- * - [AiPanelForm.RESULT]     C 结果待选: 面板收缩成一条变体带
+ * - [AiPanelForm.RESULT]     C 结果待选: **变体带落回进度条那个坑位**, 面板其余内容全留着
+ *
+ * C 不再整块替换面板: 拿到结果之后提示词框、工作流、取材来源、生成按钮都还在原位,
+ * 用户可以就地改词重跑 —— 上一版把整副骨架换成一条变体带, 想再生成只能先把结果放弃掉,
+ * 提示词得从头敲一遍, 这是纯粹的倒退。
  *
  * 核心是 §4.4 的**主按钮随上下文变形**: 文案完全由
  * [com.reverie.paint.core.comfy.AiButtonResolver] 求, 这里一行 if-else 都没有。
  *
  * @param dragBounds 父容器可用矩形 (dp), 传给 [ToolFloatPanel] 做拖拽钳制
- * @param maxContentWidth 内容区最大宽度 (dp, 已扣掉外壳内边距与左侧工具栏)。
- *   里面的行都用 `fillMaxWidth` + `weight`, 所以窄屏时第一行的选区操作会折行, 而不是被裁掉。
+ * @param maxContentWidth 内容区**定宽** (dp, 已扣掉外壳内边距与左侧工具栏)。宽屏上封顶,
+ *   窄屏上退化成可用空间, 两种情况都不会溢出。里面的行都用 `fillMaxWidth` + `weight`,
+ *   所以窄屏时第一行的选区操作会折行, 而不是被裁掉。
  */
 @Composable
 fun AiGeneratePanel(
@@ -158,13 +167,10 @@ fun AiGeneratePanel(
                 Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
                     // 失败提示: 我们自己的文案走 stringResource, ComfyUI 原文原样显示
                     AiErrorBanner(vm = vm)
-                    when (ui.form) {
-                        AiPanelForm.READY,
-                        AiPanelForm.GENERATING,
-                        -> AiPanelIntent(vm = vm, generating = ui.form == AiPanelForm.GENERATING)
-
-                        AiPanelForm.RESULT -> AiPanelVariantStrip(vm = vm)
-                    }
+                    // 三个形态共用一副骨架: 形态只换**行 3 的内容** (参数 ↔ 进度 ↔ 变体带),
+                    // 其余行 (标题 / 工作流 / 生成方式+提示词+主按钮 / 负面词 / 副标题)
+                    // 永远在场。面板报给画布的包围盒因此也只在"行 3 高差"范围内变化。
+                    AiPanelIntent(vm = vm, form = ui.form)
                 }
             }
         }
@@ -236,24 +242,28 @@ private fun AiErrorBanner(vm: PaintViewModel) {
 }
 
 // ---------------------------------------------------------------------------
-// 形态 A / B · 就绪与生成中共用同一副骨架
+// 形态 A / B / C · 三个形态共用同一副骨架
 // ---------------------------------------------------------------------------
 
 /**
- * 形态 A (就绪) 与形态 B (生成中) 共用。
+ * 形态 A / B / C 共用的骨架。
  *
- * 不是两个 Composable: 它们的行结构一样, 只有第三行换内容 (参数行 ↔ 进度行)。
- * 分成两个函数的后果是"生成中长什么样"和"就绪长什么样"各改各的, 迟早走样。
+ * 不是三个 Composable: 行的结构一样, 只有**行 3** 换内容
+ * (参数行 ↔ 进度行 ↔ 变体带)。分成三个函数的后果是"生成中长什么样""出结果后长什么样"
+ * 和"就绪长什么样"各改各的, 迟早走样 —— 上一版就是这么让结果态把整块面板吞掉的。
+ *
+ * @param form 当前形态。行 3 用它选内容, 其余行对形态无感 (结果态照样能改提示词重跑)
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun AiPanelIntent(
     vm: PaintViewModel,
-    generating: Boolean,
+    form: AiPanelForm,
 ) {
     // 面板含提示词/负面词输入框, 需挂守卫让退格/删除键不被全局快捷键吞掉
     TextInputGuard(vm)
     val ui = vm.aiUi
+    val generating = form == AiPanelForm.GENERATING
     val label = vm.aiButtonLabel()
 
     Column(verticalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -299,32 +309,28 @@ private fun AiPanelIntent(
         // ---- 行 2.5: 负面提示词 (折叠入口; 展开是多行输入) ----
         AiNegativePromptField(vm = vm)
 
-        // ---- 行 3: 参数 ↔ 进度 (FlowRow: 窄屏自动折行, 不引入横向滚动) ----
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+        // ---- 行 3: 形态槽位 (参数 ↔ 进度 ↔ 变体带) ----
+        // **形态切换只发生在这一行**, 所以面板的高度变化是有界的 (一行之内), 不会整块跳。
+        // 换法: AnimatedContent 让新旧内容**叠在同一坑位**里交叉淡入淡出, 高度用补间跟上 ——
+        // 如果让它们在 FlowRow 里各占一行, 过渡帧就会并排占位把整行撑宽, 那才是真跳动。
+        AnimatedContent(
+            targetState = form,
+            transitionSpec = {
+                fadeIn(Motion.enterSpring()).togetherWith(fadeOut(Motion.exitTween(110)))
+                    .using(
+                        SizeTransform(
+                            clip = false,
+                            sizeAnimationSpec = { _, _ -> Motion.enterSpring<IntSize>() },
+                        ),
+                    )
+            },
+            label = "aiFormSlot",
             modifier = Modifier.fillMaxWidth(),
-        ) {
-            if (generating) {
-                AiProgressRow(vm = vm, modifier = Modifier.weight(1f))
-                ToolActionButton(
-                    iconRes = R.drawable.ic_x,
-                    label = stringResource(R.string.common_cancel),
-                    onClick = { vm.cancelAiGeneration() },
-                )
-            } else {
-                AiDropdownChip(
-                    items = aiSourceItems(),
-                    selected = ui.sourceKind,
-                    onSelect = { ui.sourceKind = it },
-                )
-                Spacer(Modifier.weight(1f))
-                ToolActionButton(
-                    iconRes = R.drawable.ic_settings,
-                    label = stringResource(R.string.ai_action_settings),
-                    active = ui.advancedOpen,
-                    onClick = { ui.advancedOpen = !ui.advancedOpen },
-                )
+        ) { slot ->
+            when (slot) {
+                AiPanelForm.READY -> AiSlotIdle(vm = vm)
+                AiPanelForm.GENERATING -> AiSlotProgress(vm = vm)
+                AiPanelForm.RESULT -> AiSlotVariants(vm = vm)
             }
         }
 
@@ -359,10 +365,116 @@ private fun AiPanelIntent(
     }
 }
 
+// ---------------------------------------------------------------------------
+// 行 3 的三个住户: [AiSlotIdle] 参数 / [AiSlotProgress] 进度 / [AiSlotVariants] 变体带
+//
+// 谁上场由 [AiPanelForm] 决定, 换人不换地 —— 面板其余部分一个像素都不动。
+// ---------------------------------------------------------------------------
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AiSlotIdle(vm: PaintViewModel) {
+    val ui = vm.aiUi
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        AiDropdownChip(
+            items = aiSourceItems(),
+            selected = ui.sourceKind,
+            onSelect = { ui.sourceKind = it },
+        )
+        Spacer(Modifier.weight(1f))
+        ToolActionButton(
+            iconRes = R.drawable.ic_settings,
+            label = stringResource(R.string.ai_action_settings),
+            active = ui.advancedOpen,
+            onClick = { ui.advancedOpen = !ui.advancedOpen },
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 行 3 · 生成中: 进度 + 取消
+// ---------------------------------------------------------------------------
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun AiSlotProgress(vm: PaintViewModel) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        AiProgressRow(vm = vm, modifier = Modifier.weight(1f))
+        ToolActionButton(
+            iconRes = R.drawable.ic_x,
+            label = stringResource(R.string.common_cancel),
+            onClick = { vm.cancelAiGeneration() },
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 行 3 · 结果待选: 变体带
+// ---------------------------------------------------------------------------
+
+/**
+ * 行 3 · 形态 C: 变体缩略图 + 再生成 / 应用 / 放弃。
+ *
+ * 三个操作一个都没丢, 只是换了个位置: 以前它们独占整块面板 (提示词/工作流全被顶掉),
+ * 现在它们坐在**进度条原来那个坑位**上, 于是"出结果 → 改提示词 → 再生成"是一串连续动作,
+ * 不需要先把结果放弃掉再从头敲词。
+ *
+ * 缩略图区 `weight(1f)` + **横向滚动**: 变体多起来时滚动, 而不是把右侧三个操作挤到面板外。
+ * 三个操作按钮定宽贴在右端, 永远可点 —— 这是本行唯一不能被牺牲的东西。
+ */
+@Composable
+private fun AiSlotVariants(vm: PaintViewModel) {
+    val ui = vm.aiUi
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .weight(1f)
+                .horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ui.variants.forEach { variant ->
+                AiVariantThumb(
+                    variant = variant,
+                    selected = variant.index == ui.selectedVariant,
+                    onClick = { ui.selectedVariant = variant.index },
+                )
+            }
+        }
+        ToolActionButton(
+            iconRes = R.drawable.ic_refresh,
+            label = stringResource(R.string.ai_action_regenerate),
+            onClick = { vm.regenerateAi() },
+        )
+        ToolActionButton(
+            iconRes = R.drawable.ic_check,
+            label = stringResource(R.string.common_apply),
+            primary = true,
+            onClick = { vm.applyAiResult() },
+        )
+        ToolActionButton(
+            iconRes = R.drawable.ic_x,
+            label = stringResource(R.string.common_discard),
+            onClick = { vm.dismissAi() },
+        )
+    }
+}
+
 /**
  * 行 1: 标题 + 选区信息 + **收编来的选区操作**。
  *
- * 形态 C 不走这里 —— 结果待选时这一行整个收起来, 只剩变体带 (AI-PAINT-UX.md §4.3)。
+ * 三个形态都走这里 —— 结果待选时它同样在位, 所以出结果之后改选区/改取材来源仍然顺手。
  *
  * 用 FlowRow 而不是 Row: 这一行塞得下"标题 + 尺寸 + 4 个带文字的选区操作 + 关闭",
  * 360dp 的竖屏手机上放不下, 折行比裁切或横向滚动体面得多 (横向滚动在项目里只用于
@@ -1023,58 +1135,16 @@ private fun AiServerGuide(onOpenSettings: () -> Unit) {
 }
 
 // ---------------------------------------------------------------------------
-// 形态 C · 结果待选 (面板收缩成一条变体带)
+// 行 3 · 形态 C 的变体缩略图
 // ---------------------------------------------------------------------------
 
 /**
- * 形态 C: 整条面板缩成一行变体带。
+ * 变体缩略图。
  *
- * 变体用深色占位块 (不生成假图), 当前变体 2.5dp accent 描边高亮 —— 描边是**唯一允许的
- * 1dp+ 线条**, 因为这里表达的是"选中", 不是分区 (Morandi.border 是 Transparent,
- * 层级一律靠明度差, 见 AGENTS.md / AI-PAINT-UX.md §5.3)。
+ * 没有位图时用深色占位块 + 序号 (不生成假图)。当前变体 2.5dp accent 描边高亮 ——
+ * 描边是**唯一允许的 1dp+ 线条**, 因为这里表达的是"选中", 不是分区
+ * (Morandi.border 是 Transparent, 层级一律靠明度差, 见 AGENTS.md / AI-PAINT-UX.md §5.3)。
  */
-@Composable
-private fun AiPanelVariantStrip(
-    vm: PaintViewModel,
-) {
-    val ui = vm.aiUi
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        Icon(
-            painter = painterResource(R.drawable.ic_magicwand),
-            contentDescription = null,
-            tint = Morandi.accent,
-            modifier = Modifier.size(15.dp),
-        )
-        ui.variants.forEach { variant ->
-            AiVariantThumb(
-                variant = variant,
-                selected = variant.index == ui.selectedVariant,
-                onClick = { ui.selectedVariant = variant.index },
-            )
-        }
-        Spacer(Modifier.weight(1f))
-        ToolActionButton(
-            iconRes = R.drawable.ic_refresh,
-            label = stringResource(R.string.ai_action_regenerate),
-            onClick = { vm.regenerateAi() },
-        )
-        ToolActionButton(
-            iconRes = R.drawable.ic_check,
-            label = stringResource(R.string.common_apply),
-            primary = true,
-            onClick = { vm.applyAiResult() },
-        )
-        ToolActionButton(
-            iconRes = R.drawable.ic_x,
-            label = stringResource(R.string.common_discard),
-            onClick = { vm.dismissAi() },
-        )
-    }
-}
-
 @Composable
 private fun AiVariantThumb(
     variant: AiUiVariant,
