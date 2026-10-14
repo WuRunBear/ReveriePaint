@@ -7,7 +7,6 @@ package com.reverie.paint.core
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.RectF
-import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -79,9 +78,6 @@ private const val AI_APPLY_COUNT_KEY = "ai_applied_layer_count"
 
 /** 图层名里序号与工作流名之间的分隔符, 形如 `001 · one` */
 private const val AI_LAYER_NAME_SEPARATOR = " · "
-
-/** 诊断日志 TAG, 与 [com.reverie.paint.core.comfy.ComfyCanvasExporter] 保持一致 */
-private const val TAG = "ReverieComfy"
 
 /**
  * AI 面板的全部 UI 状态。
@@ -389,25 +385,8 @@ internal fun PaintViewModel.applyAiResult() {
     val variant = ui.variants.getOrNull(ui.selectedVariant)?.takeIf { it.bitmap != null }
         ?: ui.variants.firstOrNull { it.bitmap != null }
     val source = variant?.bitmap
-    Log.i(
-        TAG,
-        "[applyAiResult] entry: selectedVariant=${ui.selectedVariant} " +
-            "variants.size=${ui.variants.size} resolvedVariantIndex=${variant?.index} source=$source",
-    )
-    ui.variants.forEachIndexed { i, v ->
-        Log.i(
-            TAG,
-            "[applyAiResult] variant[$i] index=${v.index} bitmap=${v.bitmap} " +
-                "isRecycled=${v.bitmap?.isRecycled} w=${v.bitmap?.width} h=${v.bitmap?.height}",
-        )
-    }
     if (source == null || source.isRecycled || source.width <= 0 || source.height <= 0) {
         // 没有可用位图: 明确反馈并留在结果带, 不静默关掉会话
-        Log.e(
-            TAG,
-            "[applyAiResult] abort@bitmapGate: sourceNull=${source == null} " +
-                "recycled=${source?.isRecycled} w=${source?.width} h=${source?.height}",
-        )
         ui.errorRes = R.string.ai_error_apply_failed
         ui.errorRaw = null
         ui.panelOpen = true
@@ -420,11 +399,6 @@ internal fun PaintViewModel.applyAiResult() {
     val workflowName = comfyWorkflows.current?.name?.trim().orEmpty().ifEmpty { fallbackName }
     val layerName = formatAiLayerName(sequence, workflowName)
     val applied = java.util.concurrent.atomic.AtomicBoolean(false)
-    Log.i(
-        TAG,
-        "[applyAiResult] naming: sequence=$sequence rawWorkflowName=${comfyWorkflows.current?.name} " +
-            "workflowName=$workflowName fallbackName=$fallbackName layerName=$layerName",
-    )
 
     // 应用即收工: 停后续生成并淡出面板 (与既有交互一致); 落层失败时在 after 里重新打开并报错
     abortAiSession(ui, interrupt = true)
@@ -439,31 +413,15 @@ internal fun PaintViewModel.applyAiResult() {
     }
     clearLayerSelection()
 
-    Log.i(
-        TAG,
-        "[applyAiResult] pre-runCore: renderHandlerSet=${renderHandler != null} coreW=$coreW coreH=$coreH",
-    )
-
     runCore(
         after = {
-            Log.i(TAG, "[applyAiResult] after: start applied=${applied.get()} sequence=$sequence")
             clearLayerSelection()
             if (applied.get()) {
                 commitAiLayerSequence(sequence)
                 notifyLayerChanged(pixelChanged = true)
-                Log.i(
-                    TAG,
-                    "[applyAiResult] after: end reached notifyLayerChanged applied=true sequence=$sequence",
-                )
             } else {
                 rollbackAiLayerSequence(sequence)
                 // 文档已关闭(核心已释放)时不再弹面板, 避免在主页凭空打开 AI 面板
-                val canReopen = renderHandler != null
-                Log.i(
-                    TAG,
-                    "[applyAiResult] after: failure renderHandlerSet=$canReopen sequence=$sequence " +
-                        "willReopen=$canReopen",
-                )
                 if (renderHandler != null) {
                     ui.sessionConsumed = false
                     ui.panelOpen = true
@@ -477,27 +435,14 @@ internal fun PaintViewModel.applyAiResult() {
         try {
             val docW = coreW
             val docH = coreH
-            Log.i(TAG, "[applyAiResult] op: start docW=$docW docH=$docH")
             if (docW <= 0 || docH <= 0) {
-                Log.e(TAG, "[applyAiResult] op early-return: docW=$docW docH=$docH")
                 return@runCore
             }
             val placement =
                 ImageImportHelper.calculateCoverPlacement(docW, docH, source.width, source.height)
-            Log.i(
-                TAG,
-                "[applyAiResult] placement: docW=$docW docH=$docH imgW=${source.width} " +
-                    "imgH=${source.height} targetW=${placement.targetW} targetH=${placement.targetH} " +
-                    "x=${placement.x} y=${placement.y}",
-            )
             val work =
                 ImageImportHelper.createScaledMutableCopy(source, placement.targetW, placement.targetH)
             if (work == null) {
-                Log.e(
-                    TAG,
-                    "[applyAiResult] op early-return: createScaledMutableCopy null " +
-                        "targetW=${placement.targetW} targetH=${placement.targetH}",
-                )
                 return@runCore
             }
             // 【铁律】这里**不能**用 beginUndoMacro/endUndoMacro 包住 addLayer:
@@ -511,53 +456,23 @@ internal fun PaintViewModel.applyAiResult() {
             try {
                 // `addLayer` 在 Kotlin 侧是 Unit(不返回下标), 用层数变化判定是否真的建成了
                 val before = ReverieCoreBridge.layerCount()
-                Log.i(TAG, "[applyAiResult] addLayer before: count=$before name=$layerName")
                 ReverieCoreBridge.addLayer(layerName)
                 val afterCount = ReverieCoreBridge.layerCount()
-                Log.i(TAG, "[applyAiResult] addLayer after: before=$before after=$afterCount")
-                Log.i(
-                    TAG,
-                    "[applyAiResult] layerCount before=$before after=$afterCount " +
-                        "increased=${afterCount > before}",
-                )
                 if (afterCount <= before) {
-                    Log.e(
-                        TAG,
-                        "[applyAiResult] op early-return: layerCount not increased " +
-                            "before=$before after=$afterCount -> addLayer produced no new layer",
-                    )
                     return@runCore
                 }
                 val stampBmp = ImageImportHelper.swapRedAndBlueForStamp(work)
-                Log.i(
-                    TAG,
-                    "[applyAiResult] stamp prep: work w=${work.width} h=${work.height} " +
-                        "config=${work.config} sameInstance=${stampBmp === work} " +
-                        "stamp w=${stampBmp.width} h=${stampBmp.height} config=${stampBmp.config}",
-                )
-                Log.i(
-                    TAG,
-                    "[applyAiResult] stampBitmap before: work w=${work.width} h=${work.height} " +
-                        "config=${work.config} stampRecycled=${stampBmp.isRecycled}",
-                )
                 try {
                     ReverieCoreBridge.stampBitmap(placement.x, placement.y, stampBmp)
                 } finally {
                     if (stampBmp !== work && !stampBmp.isRecycled) stampBmp.recycle()
                 }
-                Log.i(
-                    TAG,
-                    "[applyAiResult] stampBitmap after: work w=${work.width} h=${work.height} " +
-                        "config=${work.config} stampRecycled=${stampBmp.isRecycled}",
-                )
                 applied.set(true)
-                Log.i(TAG, "[applyAiResult] op: applied set true")
             } finally {
                 if (!work.isRecycled) work.recycle()
             }
         } catch (t: Throwable) {
-            // 只记录并保持 applied=false, 再把异常抛回 runCore (保持既有失败语义不变)
-            Log.e(TAG, "applyAiResult op failed", t)
+            // 保持 applied=false, 原样抛回 runCore —— 由它既有的 catch 记录并继续派发 after()
             throw t
         }
     }

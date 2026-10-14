@@ -2397,7 +2397,6 @@
     <string name="ai_error_decode_failed">结果图解码失败</string>
     <string name="ai_error_server">服务器返回错误</string>
     <string name="ai_error_apply_failed">无法把生成结果落成图层, 请重试</string>
-    <string name="ai_layer_undo_apply">应用 AI 生成图</string>
 
     <!-- Theme Selection Mask Settings -->
     <string name="theme_category_selection_mask">选区显示</string>
