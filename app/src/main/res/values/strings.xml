@@ -411,6 +411,7 @@
     <string name="layer_default_fill">填充图层</string>
     <string name="layer_default_fill_indexed">填充图层 %d</string>
     <string name="layer_default_import_image">导入图片</string>
+    <string name="layer_default_ai_image">AI 生成图</string>
     <string name="layer_default_filter">滤镜图层</string>
     <string name="layer_default_filter_indexed">滤镜图层 %d</string>
     <string name="layer_default_stamp">盖印可见图层</string>
@@ -2395,6 +2396,8 @@
     <string name="ai_error_fetch_failed">获取结果图失败</string>
     <string name="ai_error_decode_failed">结果图解码失败</string>
     <string name="ai_error_server">服务器返回错误</string>
+    <string name="ai_error_apply_failed">无法把生成结果落成图层, 请重试</string>
+    <string name="ai_layer_undo_apply">应用 AI 生成图</string>
 
     <!-- Theme Selection Mask Settings -->
     <string name="theme_category_selection_mask">选区显示</string>

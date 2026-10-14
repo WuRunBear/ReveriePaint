@@ -137,4 +137,58 @@ class ImageImportTest {
         )
     }
 
+    @Test
+    fun `cover placement keeps canvas-sized image untouched at origin`() {
+        for ((w, h) in listOf(1000 to 1000, 1920 to 1080, 1080 to 1920, 1001 to 777)) {
+            assertEquals(
+                ImageImportHelper.FitPlacement(0, 0, w, h),
+                ImageImportHelper.calculateCoverPlacement(w, h, w, h),
+            )
+        }
+    }
+
+    @Test
+    fun `cover placement scales same aspect ratio exactly to canvas`() {
+        assertEquals(
+            ImageImportHelper.FitPlacement(0, 0, 1000, 500),
+            ImageImportHelper.calculateCoverPlacement(1000, 500, 2000, 1000),
+        )
+        assertEquals(
+            ImageImportHelper.FitPlacement(0, 0, 1000, 1000),
+            ImageImportHelper.calculateCoverPlacement(1000, 1000, 300, 300),
+        )
+    }
+
+    @Test
+    fun `cover placement crops mismatched ratios instead of stretching`() {
+        // 画布 1000x1000, 结果 2000x1000: 等比不变, 左右各溢出 500
+        assertEquals(
+            ImageImportHelper.FitPlacement(-500, 0, 2000, 1000),
+            ImageImportHelper.calculateCoverPlacement(1000, 1000, 2000, 1000),
+        )
+        // 画布 1000x1000, 结果 500x2000: 宽放大到 1000, 高溢出到 4000, 上下各裁 1500
+        assertEquals(
+            ImageImportHelper.FitPlacement(0, -1500, 1000, 4000),
+            ImageImportHelper.calculateCoverPlacement(1000, 1000, 500, 2000),
+        )
+    }
+
+    @Test
+    fun `cover placement always covers the canvas without leaving gaps`() {
+        val cases = listOf(
+            Triple(1000, 1000, 2000 to 1000),
+            Triple(1000, 1000, 500 to 2000),
+            Triple(1000, 1000, 300 to 300),
+            Triple(2048, 1024, 1536 to 1536),
+            Triple(999, 1001, 997 to 1003),
+        )
+        for ((docW, docH, img) in cases) {
+            val p = ImageImportHelper.calculateCoverPlacement(docW, docH, img.first, img.second)
+            assert(p.targetW >= docW && p.targetH >= docH) {
+                "cover $docW x $docH with ${img.first}x${img.second} -> ${p.targetW}x${p.targetH}"
+            }
+            assert(p.x <= 0 && p.y <= 0) { "cover must not leave a top-left gap: $p" }
+        }
+    }
+
 }

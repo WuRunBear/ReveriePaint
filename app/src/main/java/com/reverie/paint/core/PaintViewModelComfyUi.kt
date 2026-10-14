@@ -7,6 +7,7 @@ package com.reverie.paint.core
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.RectF
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -71,6 +72,16 @@ internal const val AI_DEFAULT_STEPS = 28
 
 /** 改动幅度未调整时滑杆与未绑定态展示用的默认值 —— 仅作显示, 不代表会注入工作流 */
 internal const val AI_DEFAULT_STRENGTH = 62
+
+/** 「应用成图层」序号持久化用的 prefs 名与 key (与自动保存历史的计数无关) */
+private const val AI_APPLY_PREFS = "paint_prefs"
+private const val AI_APPLY_COUNT_KEY = "ai_applied_layer_count"
+
+/** 图层名里序号与工作流名之间的分隔符, 形如 `001 · one` */
+private const val AI_LAYER_NAME_SEPARATOR = " · "
+
+/** 诊断日志 TAG, 与 [com.reverie.paint.core.comfy.ComfyCanvasExporter] 保持一致 */
+private const val TAG = "ReverieComfy"
 
 /**
  * AI 面板的全部 UI 状态。
@@ -160,6 +171,14 @@ internal class AiUiState {
 
     /** 当前选中的变体下标。点其他变体 = 换贴图, 不重新提交 */
     var selectedVariant by mutableIntStateOf(0)
+
+    /**
+     * 「应用成图层」的累计次数, 决定图层序号并持久化到 `paint_prefs`。
+     *
+     * `-1` = 尚未从 prefs 读取(首次应用时惰性加载); 只按**成功落层**的次数递增, 与生成次数、
+     * 自动保存历史(8 张快照, 用户可改)完全无关。抢占式 +1 见 [reserveAiLayerSequence]。
+     */
+    internal var appliedLayerCount: Int = -1
 
     // ---- 面板几何 (动态触摸避让, 见 CanvasTouchView.rebuildUiExclusionRects) ----
 
@@ -352,19 +371,253 @@ internal fun PaintViewModel.dismissAi() {
 }
 
 /**
- * ✓ 应用: 形态 C 收工。
+ * ✓ 应用: 把当前选中的变体铺满画布落成一张新图层, 再收工。
  *
- * 「应用成图层」是下一步的事, 本期只走完交互 (拿回工具、关闭面板)。
+ * **不复用 [importImageToNewLayer]** —— 那条路径会回收入参位图、强制 80% 内缩、且不组撤销宏,
+ * 三点都不符合本需求。这里新写一条专用路径:
+ * - 只读变体位图, 用 [ImageImportHelper.createScaledMutableCopy] 生成独立副本, 原图留给变体带重复使用
+ * - 等比缩放**铺满画布**([ImageImportHelper.calculateCoverPlacement]); 比例不同时居中裁切, 绝不拉伸变形
+ * - `addLayer` + `stampBitmap` **不包撤销宏**(撤销需两步: 先撤盖章, 再撤建层, 与 [importImageToNewLayer] 一致)。
+ *   撤销宏打开期间引擎会一直持有调度器 barrierLock, 而 `addLayer` 内部的同步投影等待会永久自旋, 见 op 内注释
+ *
+ * 引擎调用全部走 [runCore](铁律 2): 缩放与通道交换都在核心线程, 不阻塞触摸分发。
+ * 位图不可用 / 落层失败时保持结果带并给出错误, 不做「已建层却没盖章」的半更新。
  */
 internal fun PaintViewModel.applyAiResult() {
     val ui = aiUi
+    // 先取选中变体; 越界或该变体尚未解出位图时, 退回第一个有位图的变体
+    val variant = ui.variants.getOrNull(ui.selectedVariant)?.takeIf { it.bitmap != null }
+        ?: ui.variants.firstOrNull { it.bitmap != null }
+    val source = variant?.bitmap
+    Log.i(
+        TAG,
+        "[applyAiResult] entry: selectedVariant=${ui.selectedVariant} " +
+            "variants.size=${ui.variants.size} resolvedVariantIndex=${variant?.index} source=$source",
+    )
+    ui.variants.forEachIndexed { i, v ->
+        Log.i(
+            TAG,
+            "[applyAiResult] variant[$i] index=${v.index} bitmap=${v.bitmap} " +
+                "isRecycled=${v.bitmap?.isRecycled} w=${v.bitmap?.width} h=${v.bitmap?.height}",
+        )
+    }
+    if (source == null || source.isRecycled || source.width <= 0 || source.height <= 0) {
+        // 没有可用位图: 明确反馈并留在结果带, 不静默关掉会话
+        Log.e(
+            TAG,
+            "[applyAiResult] abort@bitmapGate: sourceNull=${source == null} " +
+                "recycled=${source?.isRecycled} w=${source?.width} h=${source?.height}",
+        )
+        ui.errorRes = R.string.ai_error_apply_failed
+        ui.errorRaw = null
+        ui.panelOpen = true
+        return
+    }
+
+    // 抢占序号(内存 +1, 防连点重名); 成功后落盘, 失败回滚 —— 保证「成功一次才 +1」
+    val sequence = reserveAiLayerSequence()
+    val fallbackName = if (hasAppContext()) appContext.getString(R.string.layer_default_ai_image) else ""
+    val workflowName = comfyWorkflows.current?.name?.trim().orEmpty().ifEmpty { fallbackName }
+    val layerName = formatAiLayerName(sequence, workflowName)
+    val applied = java.util.concurrent.atomic.AtomicBoolean(false)
+    Log.i(
+        TAG,
+        "[applyAiResult] naming: sequence=$sequence rawWorkflowName=${comfyWorkflows.current?.name} " +
+            "workflowName=$workflowName fallbackName=$fallbackName layerName=$layerName",
+    )
+
+    // 应用即收工: 停后续生成并淡出面板 (与既有交互一致); 落层失败时在 after 里重新打开并报错
     abortAiSession(ui, interrupt = true)
     ui.driverJob?.cancel()
     ui.driverJob = null
-    // 同上: 直接淡出, 内容保持变体带, 不要"先退回就绪态再关闭"
     ui.sessionConsumed = true
     ui.panelOpen = false
-    applyTool(Tool.BRUSH.id)
+    if (currentToolId == Tool.AI_IMAGE.id) applyTool(Tool.BRUSH.id)
+
+    if (recorder.recording) {
+        recorder.layerOp(com.reverie.paint.model.RecordingEvents.L_ADD)
+    }
+    clearLayerSelection()
+
+    Log.i(
+        TAG,
+        "[applyAiResult] pre-runCore: renderHandlerSet=${renderHandler != null} coreW=$coreW coreH=$coreH",
+    )
+
+    runCore(
+        after = {
+            Log.i(TAG, "[applyAiResult] after: start applied=${applied.get()} sequence=$sequence")
+            clearLayerSelection()
+            if (applied.get()) {
+                commitAiLayerSequence(sequence)
+                notifyLayerChanged(pixelChanged = true)
+                Log.i(
+                    TAG,
+                    "[applyAiResult] after: end reached notifyLayerChanged applied=true sequence=$sequence",
+                )
+            } else {
+                rollbackAiLayerSequence(sequence)
+                // 文档已关闭(核心已释放)时不再弹面板, 避免在主页凭空打开 AI 面板
+                val canReopen = renderHandler != null
+                Log.i(
+                    TAG,
+                    "[applyAiResult] after: failure renderHandlerSet=$canReopen sequence=$sequence " +
+                        "willReopen=$canReopen",
+                )
+                if (renderHandler != null) {
+                    ui.sessionConsumed = false
+                    ui.panelOpen = true
+                    ui.form = AiPanelForm.RESULT
+                    ui.errorRes = R.string.ai_error_apply_failed
+                    ui.errorRaw = null
+                }
+            }
+        },
+    ) {
+        try {
+            val docW = coreW
+            val docH = coreH
+            Log.i(TAG, "[applyAiResult] op: start docW=$docW docH=$docH")
+            if (docW <= 0 || docH <= 0) {
+                Log.e(TAG, "[applyAiResult] op early-return: docW=$docW docH=$docH")
+                return@runCore
+            }
+            val placement =
+                ImageImportHelper.calculateCoverPlacement(docW, docH, source.width, source.height)
+            Log.i(
+                TAG,
+                "[applyAiResult] placement: docW=$docW docH=$docH imgW=${source.width} " +
+                    "imgH=${source.height} targetW=${placement.targetW} targetH=${placement.targetH} " +
+                    "x=${placement.x} y=${placement.y}",
+            )
+            val work =
+                ImageImportHelper.createScaledMutableCopy(source, placement.targetW, placement.targetH)
+            if (work == null) {
+                Log.e(
+                    TAG,
+                    "[applyAiResult] op early-return: createScaledMutableCopy null " +
+                        "targetW=${placement.targetW} targetH=${placement.targetH}",
+                )
+                return@runCore
+            }
+            // 【铁律】这里**不能**用 beginUndoMacro/endUndoMacro 包住 addLayer:
+            // KisLegacyUndoAdapter::beginMacro 会调用 KisImage::barrierLock() 并一直持有到
+            // endMacro (kis_legacy_undo_adapter.cpp), 而 addLayer 内部的
+            // recompositeProjection() = refreshGraphAsync + waitForDone 会同步等待被该 barrier
+            // 卡住的投影任务 -> 渲染线程在 KisUpdateScheduler::waitForDone 的自旋里永久卡死,
+            // 之后所有 runCore 任务(含再次生成的第一步 renderDocumentBitmap)再也排不到。
+            // C++ 侧既有用法一律在 endUndoMacro 之后才 recompositeProjection; 本路径与
+            // importImageToNewLayer 对齐: 只记录两条独立撤销(先撤盖章, 再撤建层)。
+            try {
+                // `addLayer` 在 Kotlin 侧是 Unit(不返回下标), 用层数变化判定是否真的建成了
+                val before = ReverieCoreBridge.layerCount()
+                Log.i(TAG, "[applyAiResult] addLayer before: count=$before name=$layerName")
+                ReverieCoreBridge.addLayer(layerName)
+                val afterCount = ReverieCoreBridge.layerCount()
+                Log.i(TAG, "[applyAiResult] addLayer after: before=$before after=$afterCount")
+                Log.i(
+                    TAG,
+                    "[applyAiResult] layerCount before=$before after=$afterCount " +
+                        "increased=${afterCount > before}",
+                )
+                if (afterCount <= before) {
+                    Log.e(
+                        TAG,
+                        "[applyAiResult] op early-return: layerCount not increased " +
+                            "before=$before after=$afterCount -> addLayer produced no new layer",
+                    )
+                    return@runCore
+                }
+                val stampBmp = ImageImportHelper.swapRedAndBlueForStamp(work)
+                Log.i(
+                    TAG,
+                    "[applyAiResult] stamp prep: work w=${work.width} h=${work.height} " +
+                        "config=${work.config} sameInstance=${stampBmp === work} " +
+                        "stamp w=${stampBmp.width} h=${stampBmp.height} config=${stampBmp.config}",
+                )
+                Log.i(
+                    TAG,
+                    "[applyAiResult] stampBitmap before: work w=${work.width} h=${work.height} " +
+                        "config=${work.config} stampRecycled=${stampBmp.isRecycled}",
+                )
+                try {
+                    ReverieCoreBridge.stampBitmap(placement.x, placement.y, stampBmp)
+                } finally {
+                    if (stampBmp !== work && !stampBmp.isRecycled) stampBmp.recycle()
+                }
+                Log.i(
+                    TAG,
+                    "[applyAiResult] stampBitmap after: work w=${work.width} h=${work.height} " +
+                        "config=${work.config} stampRecycled=${stampBmp.isRecycled}",
+                )
+                applied.set(true)
+                Log.i(TAG, "[applyAiResult] op: applied set true")
+            } finally {
+                if (!work.isRecycled) work.recycle()
+            }
+        } catch (t: Throwable) {
+            // 只记录并保持 applied=false, 再把异常抛回 runCore (保持既有失败语义不变)
+            Log.e(TAG, "applyAiResult op failed", t)
+            throw t
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 「应用成图层」的图层名与序号 (纯逻辑, 见 AiLayerNamingTest)
+// ---------------------------------------------------------------------------
+
+/** 图层序号: 至少三位补零; 超过 999 自然升位, 不截断 */
+internal fun formatAiLayerSequence(sequence: Int): String =
+    sequence.coerceAtLeast(0).toString().padStart(3, '0')
+
+/**
+ * 图层名 = 「序号 · 工作流名」(例: `001 · one`)。
+ * 工作流名为空时退化为纯序号 —— 调用方应传入默认文案(见 [R.string.layer_default_ai_image])兜底。
+ */
+internal fun formatAiLayerName(sequence: Int, workflowName: String): String {
+    val seq = formatAiLayerSequence(sequence)
+    return if (workflowName.isBlank()) seq else "$seq$AI_LAYER_NAME_SEPARATOR$workflowName"
+}
+
+/** 读取持久化的应用次数, 首次调用时从 `paint_prefs` 惰性加载 */
+private fun PaintViewModel.aiAppliedLayerCount(): Int {
+    val ui = aiUi
+    if (ui.appliedLayerCount < 0) {
+        val loaded =
+            if (hasAppContext()) {
+                appContext
+                    .getSharedPreferences(AI_APPLY_PREFS, android.content.Context.MODE_PRIVATE)
+                    .getInt(AI_APPLY_COUNT_KEY, 0)
+            } else {
+                0
+            }
+        ui.appliedLayerCount = loaded.coerceAtLeast(0)
+    }
+    return ui.appliedLayerCount
+}
+
+/** 抢占下一个序号: 先在内存 +1, 成功落盘 / 失败回滚都由调用方决定 */
+private fun PaintViewModel.reserveAiLayerSequence(): Int =
+    (aiAppliedLayerCount() + 1).also { aiUi.appliedLayerCount = it }
+
+/** 落层成功: 把抢占的序号固化到内存与 `paint_prefs` */
+private fun PaintViewModel.commitAiLayerSequence(sequence: Int) {
+    aiUi.appliedLayerCount = sequence
+    if (hasAppContext()) {
+        appContext
+            .getSharedPreferences(AI_APPLY_PREFS, android.content.Context.MODE_PRIVATE)
+            .edit()
+            .putInt(AI_APPLY_COUNT_KEY, sequence)
+            .apply()
+    }
+}
+
+/** 落层失败: 回滚抢占的序号, 让下一次成功应用仍拿到同一个编号 */
+private fun PaintViewModel.rollbackAiLayerSequence(sequence: Int) {
+    if (aiUi.appliedLayerCount == sequence) {
+        aiUi.appliedLayerCount = sequence - 1
+    }
 }
 
 /**

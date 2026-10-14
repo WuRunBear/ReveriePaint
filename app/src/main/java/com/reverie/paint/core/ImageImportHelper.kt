@@ -14,6 +14,8 @@ import android.provider.OpenableColumns
 import com.reverie.paint.model.MemoryBudget
 import java.io.File
 import java.io.FileOutputStream
+import kotlin.math.ceil
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
@@ -65,6 +67,68 @@ object ImageImportHelper {
         val x = (docW - targetW) / 2
         val y = (docH - targetH) / 2
         return FitPlacement(x, y, targetW, targetH)
+    }
+
+    /**
+     * 覆盖式摆放: 等比缩放到**刚好盖住画布**的最小尺寸并居中。
+     *
+     * 与 [calculateFitPlacement] 的「缩到 [maxRatio] 内居中」相反 —— 这里服务"把结果铺满画布"
+     * 的需求: 比例不同时按较大的一边对齐放大, 超出画布的部分由 `stampBitmap` 的矩形求交裁掉
+     * ([FitPlacement.x]/[FitPlacement.y] 可能为负, 表示向左/上溢出)。**绝不非等比拉伸变形**。
+     * 结果与画布同尺寸时原样落在原点; 比例一致、尺寸不同时正好缩放到画布尺寸。
+     */
+    fun calculateCoverPlacement(
+        docW: Int,
+        docH: Int,
+        imgW: Int,
+        imgH: Int,
+    ): FitPlacement {
+        if (docW <= 0 || docH <= 0 || imgW <= 0 || imgH <= 0) {
+            return FitPlacement(0, 0, imgW.coerceAtLeast(1), imgH.coerceAtLeast(1))
+        }
+        if (imgW == docW && imgH == docH) {
+            return FitPlacement(0, 0, imgW, imgH)
+        }
+        val scale = max(docW.toFloat() / imgW, docH.toFloat() / imgH)
+        // ceil + coerceAtLeast: 四舍五入可能让覆盖边比画布少 1 像素, 必须保证盖满(不留边)
+        val targetW = ceil(imgW * scale).toInt().coerceAtLeast(docW)
+        val targetH = ceil(imgH * scale).toInt().coerceAtLeast(docH)
+        return FitPlacement(
+            x = (docW - targetW) / 2,
+            y = (docH - targetH) / 2,
+            targetW = targetW,
+            targetH = targetH,
+        )
+    }
+
+    /**
+     * 生成一张**独立的、可原地改通道的** ARGB_8888 缩放副本 —— 入参 [src] 只读、不回收。
+     *
+     * 专供"AI 结果落层"路径: 结果位图要在变体带里反复使用, 不能像导入那样被 `recycle()`,
+     * 也不能被 [swapRedAndBlueForStamp] 的原地交换改动。尺寸一致时同样返回副本。
+     * 失败(OOM / 非法尺寸)返回 null, 由调用方走明确失败分支。
+     */
+    fun createScaledMutableCopy(
+        src: Bitmap,
+        targetW: Int,
+        targetH: Int,
+    ): Bitmap? {
+        if (targetW <= 0 || targetH <= 0 || src.width <= 0 || src.height <= 0) return null
+        return try {
+            val out = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+            val canvas = android.graphics.Canvas(out)
+            val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
+            canvas.drawBitmap(
+                src,
+                android.graphics.Rect(0, 0, src.width, src.height),
+                android.graphics.Rect(0, 0, targetW, targetH),
+                paint,
+            )
+            out
+        } catch (t: Throwable) {
+            android.util.Log.e("ImageImportHelper", "createScaledMutableCopy failed", t)
+            null
+        }
     }
 
     /**

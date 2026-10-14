@@ -411,6 +411,7 @@
     <string name="layer_default_fill">Fill Layer</string>
     <string name="layer_default_fill_indexed">Fill Layer %d</string>
     <string name="layer_default_import_image">Imported Image</string>
+    <string name="layer_default_ai_image">AI Image</string>
     <string name="layer_default_filter">Filter Layer</string>
     <string name="layer_default_filter_indexed">Filter Layer %d</string>
     <string name="layer_default_stamp">Stamp Visible Layers</string>
@@ -2395,6 +2396,8 @@
     <string name="ai_error_fetch_failed">Failed to fetch the result image</string>
     <string name="ai_error_decode_failed">Failed to decode the result image</string>
     <string name="ai_error_server">Server returned an error</string>
+    <string name="ai_error_apply_failed">Could not apply the generated result as a layer, try again</string>
+    <string name="ai_layer_undo_apply">Apply AI Image</string>
 
     <!-- Theme Selection Mask Settings -->
     <string name="theme_category_selection_mask">Selection Display</string>
