@@ -153,4 +153,35 @@ class ComfyResolutionTest {
         assertEquals(1f, ComfyResolution.compute(700, 700, ComfyResolutionTier.SD15).scale, 1e-6f)
         assertEquals(0.256f, ComfyResolution.compute(6000, 6000, ComfyResolutionTier.HIGH).scale, 1e-6f)
     }
+
+    @Test
+    fun `every export resolution tier is already 64 aligned`() {
+        for (res in ComfyExportResolution.entries) {
+            assertEquals(res.maxEdge, ComfyResolution.alignTo64(res.maxEdge))
+        }
+    }
+
+    @Test
+    fun `export resolution default equals the historical HIGH tier`() {
+        assertEquals(ComfyResolutionTier.HIGH.maxEdge, ComfyExportResolution.DEFAULT.maxEdge)
+    }
+
+    @Test
+    fun `fromMaxEdge restores a known value and falls back to default`() {
+        assertEquals(ComfyExportResolution.R4096, ComfyExportResolution.fromMaxEdge(4096))
+        assertEquals(ComfyExportResolution.DEFAULT, ComfyExportResolution.fromMaxEdge(1234))
+    }
+
+    @Test
+    fun `user resolution cap scales to the selected long edge`() {
+        val out = ComfyResolution.compute(4000, 2800, ComfyExportResolution.R2048)
+        assertEquals(2048, out.width)
+        assertEquals(1408, out.height)
+
+        // 4096 大于源图长边, 不放大, 保持原尺寸
+        val noUpscale = ComfyResolution.compute(4000, 2800, ComfyExportResolution.R4096)
+        assertEquals(4000, noUpscale.width)
+        assertEquals(2800, noUpscale.height)
+        assertEquals(1f, noUpscale.scale, 1e-6f)
+    }
 }

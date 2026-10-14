@@ -8,6 +8,30 @@ internal enum class ComfyResolutionTier(val maxEdge: Int?) {
     HIGH(1536),
 }
 
+/**
+ * 用户可选的「生图分辨率上限」(上传给 ComfyUI 的输入图最长边)。
+ *
+ * 上限越高, 输入图越大 —— 上传耗时 / 显存占用 / 服务器处理时间随之上升, 由用户按机器与
+ * 网络自行权衡, 因此做成档位而非直接调大默认值。默认 [R1536] 与历史 HIGH 档行为一致。
+ *
+ * 四档均为 64 的整数倍, 与 [ComfyResolution.ALIGN] 自然对齐, 不会被向下取整。
+ */
+internal enum class ComfyExportResolution(val maxEdge: Int) {
+    R1536(1536),
+    R2048(2048),
+    R3072(3072),
+    R4096(4096),
+    ;
+
+    companion object {
+        val DEFAULT = R1536
+
+        /** 从持久化数值恢复; 非法值回落到 [DEFAULT] */
+        fun fromMaxEdge(value: Int): ComfyExportResolution =
+            entries.firstOrNull { it.maxEdge == value } ?: DEFAULT
+    }
+}
+
 /** 导出尺寸与实际缩放比 */
 internal data class ComfyTargetSize(
     val width: Int,
@@ -29,12 +53,19 @@ internal object ComfyResolution {
     const val ALIGN = 64
     const val MIN_EDGE = 64
 
-    fun compute(srcWidth: Int, srcHeight: Int, tier: ComfyResolutionTier): ComfyTargetSize {
+    fun compute(srcWidth: Int, srcHeight: Int, tier: ComfyResolutionTier): ComfyTargetSize =
+        computeForMaxEdge(srcWidth, srcHeight, tier.maxEdge)
+
+    /** 按用户所选导出上限计算, 档位见 [ComfyExportResolution] */
+    fun compute(srcWidth: Int, srcHeight: Int, resolution: ComfyExportResolution): ComfyTargetSize =
+        computeForMaxEdge(srcWidth, srcHeight, resolution.maxEdge)
+
+    /** [maxEdge] 为最长边上限, null 表示保持原图尺寸 */
+    private fun computeForMaxEdge(srcWidth: Int, srcHeight: Int, maxEdge: Int?): ComfyTargetSize {
         val w = srcWidth.coerceAtLeast(1)
         val h = srcHeight.coerceAtLeast(1)
         val srcLong = maxOf(w, h)
         val srcShort = minOf(w, h)
-        val maxEdge = tier.maxEdge
 
         if (maxEdge == null || maxEdge >= srcLong) {
             return ComfyTargetSize(

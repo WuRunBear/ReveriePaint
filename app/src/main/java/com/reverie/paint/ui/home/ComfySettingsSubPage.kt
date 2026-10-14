@@ -51,8 +51,10 @@ import com.reverie.paint.core.ComfyConnectionStatus
 import com.reverie.paint.core.PaintViewModel
 import com.reverie.paint.core.addComfyHeaderRow
 import com.reverie.paint.core.comfy.ComfyAuthMode
+import com.reverie.paint.core.comfy.ComfyExportResolution
 import com.reverie.paint.core.persistComfySettings
 import com.reverie.paint.core.removeComfyHeaderRow
+import com.reverie.paint.core.setComfyExportResolution
 import com.reverie.paint.core.setComfyTrustSelfSigned
 import com.reverie.paint.core.testComfyConnection
 import com.reverie.paint.ui.components.pressScale
@@ -185,6 +187,20 @@ internal fun ComfySettingsSubPage(
                     checked = server.trustSelfSigned,
                     shape = settingGroupShape(0, 1),
                     onCheckedChange = { vm.setComfyTrustSelfSigned(it) },
+                )
+            }
+
+            // ---- 生成 ----
+            Spacer(Modifier.height(8.dp))
+            SettingCategoryTitle(stringResource(R.string.comfy_category_generation))
+            SettingGroup {
+                SettingSegmentGroupItem(
+                    title = stringResource(R.string.comfy_export_resolution),
+                    summary = stringResource(R.string.comfy_export_resolution_summary),
+                    options = ComfyExportResolution.entries.map { it to it.maxEdge.toString() },
+                    selected = vm.comfyExportResolution,
+                    shape = settingGroupShape(0, 1),
+                    onSelect = { vm.setComfyExportResolution(it) },
                 )
             }
 

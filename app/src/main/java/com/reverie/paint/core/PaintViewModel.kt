@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.reverie.paint.R
+import com.reverie.paint.core.comfy.ComfyExportResolution
 import com.reverie.paint.core.stylus.StylusAudioType
 import com.reverie.paint.model.*
 import com.reverie.paint.perf.PerfHud
@@ -5039,6 +5040,9 @@ class PaintViewModel : ViewModel() {
 
     /** ComfyUI 服务器配置状态。实现在 PaintViewModelComfyUi.kt (partial 扩展) */
     internal val comfyServer = ComfyServerState()
+
+    /** 生图导出给 ComfyUI 的输入图最长边上限。存/取实现在 PaintViewModelComfyUi.kt */
+    internal var comfyExportResolution by mutableStateOf(ComfyExportResolution.DEFAULT)
 
     /** 已导入的 ComfyUI 工作流。实现在 PaintViewModelComfyWorkflows.kt (partial 扩展) */
     internal val comfyWorkflows = ComfyWorkflowState()

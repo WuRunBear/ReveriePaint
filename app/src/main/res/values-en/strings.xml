@@ -2711,6 +2711,9 @@
     <string name="comfy_category_security">Security</string>
     <string name="comfy_trust_self_signed">Trust self-signed certificates</string>
     <string name="comfy_trust_self_signed_summary">Enable when the server uses a self-signed HTTPS certificate</string>
+    <string name="comfy_category_generation">Generation</string>
+    <string name="comfy_export_resolution">Generation resolution cap</string>
+    <string name="comfy_export_resolution_summary">Longest edge of the image sent to the server; larger is sharper but slower to upload and process</string>
     <string name="comfy_test_connection">Test connection</string>
     <string name="comfy_status_not_configured">Server not configured</string>
     <string name="comfy_status_testing">Connecting…</string>

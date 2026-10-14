@@ -58,8 +58,9 @@ internal object ComfyCanvasExporter {
         }
         // 整幅原尺寸位图 (与显示缓冲同量级), 后处理完立刻回收
         val full = vm.renderDocumentBitmap() ?: return CanvasExportResult.Failed
+        val resolution = vm.comfyExportResolution
         return try {
-            withContext(Dispatchers.IO) { process(full) }
+            withContext(Dispatchers.IO) { process(full, resolution) }
         } finally {
             runCatching { full.recycle() }
         }
@@ -107,8 +108,11 @@ internal object ComfyCanvasExporter {
     // ---------------------------------------------------------------- 后处理
 
     /** 缩放 → 透明填白 → WebP。调用方负责回收 [full] */
-    private fun process(full: Bitmap): CanvasExportResult {
-        val target = ComfyResolution.compute(full.width, full.height, ComfyResolutionTier.HIGH)
+    private fun process(
+        full: Bitmap,
+        resolution: ComfyExportResolution,
+    ): CanvasExportResult {
+        val target = ComfyResolution.compute(full.width, full.height, resolution)
         Log.i(TAG, "process: src=${full.width}x${full.height} target=${target.width}x${target.height}")
 
         var scaled: Bitmap? = null

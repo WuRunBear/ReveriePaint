@@ -30,6 +30,7 @@ import com.reverie.paint.core.comfy.ComfyClient
 import com.reverie.paint.core.comfy.ComfyConnectionError
 import com.reverie.paint.core.comfy.ComfyCredentialStore
 import com.reverie.paint.core.comfy.ComfyCredentials
+import com.reverie.paint.core.comfy.ComfyExportResolution
 import com.reverie.paint.core.comfy.ComfyImageRef
 import com.reverie.paint.core.comfy.ComfyParamDefaultsReader
 import com.reverie.paint.core.comfy.ComfyPromptBuilder
@@ -1126,6 +1127,13 @@ internal fun PaintViewModel.loadComfySettings() {
     server.status = ComfyConnectionStatus.NOT_CONFIGURED
     server.statusDetail = ""
     server.lastAttemptUrl = ""
+    // 生图导出上限 (与 autoSave* 共用 paint_prefs)
+    comfyExportResolution =
+        ComfyExportResolution.fromMaxEdge(
+            appContext
+                .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+                .getInt("comfy_export_resolution", ComfyExportResolution.DEFAULT.maxEdge),
+        )
 }
 
 /** 新增一行空的请求头 */
@@ -1141,6 +1149,17 @@ internal fun PaintViewModel.removeComfyHeaderRow(index: Int) {
 internal fun PaintViewModel.setComfyTrustSelfSigned(value: Boolean) {
     comfyServer.trustSelfSigned = value
     persistComfySettings()
+}
+
+/** 设置生图导出分辨率上限并落盘 (与 autoSave* 共用 paint_prefs) */
+internal fun PaintViewModel.setComfyExportResolution(resolution: ComfyExportResolution) {
+    comfyExportResolution = resolution
+    if (!hasAppContext()) return
+    appContext
+        .getSharedPreferences("paint_prefs", android.content.Context.MODE_PRIVATE)
+        .edit()
+        .putInt("comfy_export_resolution", resolution.maxEdge)
+        .apply()
 }
 
 /** 落盘非敏感配置 (地址 / 认证方式 / 用户名 / 请求头 / 自签开关) */

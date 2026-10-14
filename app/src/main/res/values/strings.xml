@@ -2711,6 +2711,9 @@
     <string name="comfy_category_security">安全</string>
     <string name="comfy_trust_self_signed">信任自签证书</string>
     <string name="comfy_trust_self_signed_summary">服务器使用自签名 HTTPS 证书时开启</string>
+    <string name="comfy_category_generation">生成</string>
+    <string name="comfy_export_resolution">生图分辨率上限</string>
+    <string name="comfy_export_resolution_summary">上传给服务器的输入图最长边, 越大越清晰但上传与处理更慢</string>
     <string name="comfy_test_connection">测试连接</string>
     <string name="comfy_status_not_configured">尚未配置服务器</string>
     <string name="comfy_status_testing">正在连接…</string>
