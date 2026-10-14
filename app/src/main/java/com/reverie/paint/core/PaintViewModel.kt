@@ -904,6 +904,7 @@ class PaintViewModel : ViewModel() {
 
     // Quick Actions Tool Window State (快捷操作浮窗)
     var quickActionWindowOpen by mutableStateOf(false)
+    var quickActionWindowWasOpen = false
     var quickActionsConfig by mutableStateOf(com.reverie.paint.model.QuickActionsConfig())
     var quickActionWindowX by mutableFloatStateOf(-1f)
     var quickActionWindowY by mutableFloatStateOf(-1f)
@@ -929,6 +930,7 @@ class PaintViewModel : ViewModel() {
 
     // Quick Brush Tool Window State (快捷笔刷浮窗)
     var quickBrushWindowOpen by mutableStateOf(false)
+    var quickBrushWindowWasOpen = false
     var quickBrushWindowX by mutableFloatStateOf(-1f)
     var quickBrushWindowY by mutableFloatStateOf(-1f)
     var quickBrushWindowWidth by mutableFloatStateOf(0f)
@@ -958,6 +960,7 @@ class PaintViewModel : ViewModel() {
 
     // Quick Color Tool Window State (快捷颜色浮窗)
     var quickColorWindowOpen by mutableStateOf(false)
+    var quickColorWindowWasOpen = false
     var quickColorWindowX by mutableFloatStateOf(-1f)
     var quickColorWindowY by mutableFloatStateOf(-1f)
     var quickColorWindowWidth by mutableFloatStateOf(0f)
@@ -1002,6 +1005,7 @@ class PaintViewModel : ViewModel() {
 
     // Quick Layer Tool Window State (快捷图层浮窗)
     var quickLayerWindowOpen by mutableStateOf(false)
+    var quickLayerWindowWasOpen = false
     var quickLayerWindowX by mutableFloatStateOf(-1f)
     var quickLayerWindowY by mutableFloatStateOf(-1f)
     var quickLayerWindowWidth by mutableFloatStateOf(0f)
@@ -1135,6 +1139,17 @@ class PaintViewModel : ViewModel() {
         }
         syncAuthorProfileToCore()
     }
+
+    fun isQuickActionActivated(action: com.reverie.paint.model.QuickAction): Boolean =
+        when (action) {
+            com.reverie.paint.model.QuickAction.LOCK_VIEW -> isViewTransformLocked
+            com.reverie.paint.model.QuickAction.FLIP_H -> viewFlipX
+            com.reverie.paint.model.QuickAction.FLIP_V -> viewFlipY
+            com.reverie.paint.model.QuickAction.TOGGLE_ERASER -> currentToolId == "eraser"
+            com.reverie.paint.model.QuickAction.ALPHA_LOCK -> isCurrentLayerAlphaLocked()
+            com.reverie.paint.model.QuickAction.DISABLE_TOUCH -> isCanvasTouchDisabled
+            else -> false
+        }
 
     fun syncAuthorProfileToCore() {
         runCore(render = false) {
@@ -2912,11 +2927,13 @@ class PaintViewModel : ViewModel() {
         topBarPosition: com.reverie.paint.model.PanelPosition = floatingUiConfig.topBarPosition,
         toolRailPosition: com.reverie.paint.model.PanelPosition = floatingUiConfig.toolRailPosition,
         sliderRailPosition: com.reverie.paint.model.PanelPosition = floatingUiConfig.sliderRailPosition,
+        panelOrder: List<String> = floatingUiConfig.panelOrder,
     ) {
         floatingUiConfig = floatingUiConfig.copy(
             topBarPosition = topBarPosition,
             toolRailPosition = toolRailPosition,
             sliderRailPosition = sliderRailPosition,
+            panelOrder = panelOrder,
         )
         persistFloatingUiConfig()
     }
@@ -2931,6 +2948,16 @@ class PaintViewModel : ViewModel() {
         persistFloatingUiConfig()
     }
 
+    fun updateFloatingUiTopBarActions(actions: List<com.reverie.paint.model.QuickAction>) {
+        floatingUiConfig = floatingUiConfig.copy(topBarActions = actions)
+        persistFloatingUiConfig()
+    }
+
+    fun updateFloatingUiPanelOrder(order: List<String>) {
+        floatingUiConfig = floatingUiConfig.copy(panelOrder = order)
+        persistFloatingUiConfig()
+    }
+
     fun resetFloatingUiEdges() {
         floatingUiConfig = floatingUiConfig.copy(
             topBarPosition = com.reverie.paint.model.PanelPosition(com.reverie.paint.model.PanelEdge.TOP, com.reverie.paint.model.PanelAlignment.END),
@@ -2938,6 +2965,8 @@ class PaintViewModel : ViewModel() {
             sliderRailPosition = com.reverie.paint.model.PanelPosition(com.reverie.paint.model.PanelEdge.LEFT, com.reverie.paint.model.PanelAlignment.END),
             marginDp = 12,
             scale = 1.0f,
+            topBarActions = emptyList(),
+            panelOrder = com.reverie.paint.model.FloatingUiConfig.DEFAULT_PANEL_ORDER,
         )
         persistFloatingUiConfig()
     }
@@ -2956,6 +2985,8 @@ class PaintViewModel : ViewModel() {
                 .putString("floatingUi_sliderRailAlign", floatingUiConfig.sliderRailPosition.alignment.name)
                 .putInt("floatingUi_marginDp", floatingUiConfig.marginDp)
                 .putFloat("floatingUi_scale", floatingUiConfig.scale)
+                .putString("floatingUi_topBarActions", floatingUiConfig.topBarActions.joinToString(",") { it.id })
+                .putString("floatingUi_panelOrder", floatingUiConfig.panelOrder.joinToString(","))
                 .apply()
         }
     }
@@ -3244,6 +3275,19 @@ class PaintViewModel : ViewModel() {
             val sliderRailAlignName = prefs.getString("floatingUi_sliderRailAlign", "END") ?: "END"
             val marginDp = prefs.getInt("floatingUi_marginDp", 12).coerceIn(8, 48)
             val floatingScale = prefs.getFloat("floatingUi_scale", 1.0f).coerceIn(0.70f, 1.40f)
+            val topBarActionsStr = prefs.getString("floatingUi_topBarActions", null)
+            val topBarActions = if (!topBarActionsStr.isNullOrEmpty()) {
+                topBarActionsStr.split(",").mapNotNull { com.reverie.paint.model.QuickAction.fromId(it) }
+            } else {
+                emptyList()
+            }
+            val panelOrderStr = prefs.getString("floatingUi_panelOrder", null)
+            val panelOrder = if (!panelOrderStr.isNullOrEmpty()) {
+                val list = panelOrderStr.split(",").filter { it.isNotBlank() }
+                if (list.isNotEmpty()) list else com.reverie.paint.model.FloatingUiConfig.DEFAULT_PANEL_ORDER
+            } else {
+                com.reverie.paint.model.FloatingUiConfig.DEFAULT_PANEL_ORDER
+            }
             floatingUiConfig = com.reverie.paint.model.FloatingUiConfig(
                 enabled = isTabletDevice && floatingSavedEnabled,
                 topBarPosition = com.reverie.paint.model.PanelPosition(
@@ -3260,6 +3304,8 @@ class PaintViewModel : ViewModel() {
                 ),
                 marginDp = marginDp,
                 scale = floatingScale,
+                topBarActions = topBarActions,
+                panelOrder = panelOrder,
             )
             selectionMaskColorHex = prefs.getString("selection_mask_color", "#141416") ?: "#141416"
             selectionMaskOpacity = prefs.getFloat("selection_mask_opacity", 0.47f).coerceIn(0.10f, 0.90f)
@@ -3487,6 +3533,7 @@ class PaintViewModel : ViewModel() {
 
             // 快捷操作浮窗持久化恢复
             quickActionWindowOpen = prefs.getBoolean("quick_action_open", false)
+            quickActionWindowWasOpen = quickActionWindowOpen
             quickActionWindowX = prefs.getFloat("quick_action_x", -1f)
             quickActionWindowY = prefs.getFloat("quick_action_y", -1f)
             if (quickActionWindowX == 60f && quickActionWindowY == 200f) {
@@ -3510,6 +3557,7 @@ class PaintViewModel : ViewModel() {
 
             // 快捷笔刷浮窗持久化恢复
             quickBrushWindowOpen = prefs.getBoolean("quick_brush_open", false)
+            quickBrushWindowWasOpen = quickBrushWindowOpen
             quickBrushWindowX = prefs.getFloat("quick_brush_x", -1f)
             quickBrushWindowY = prefs.getFloat("quick_brush_y", -1f)
             if (quickBrushWindowX == 60f && quickBrushWindowY == 280f) {
@@ -3526,6 +3574,7 @@ class PaintViewModel : ViewModel() {
 
             // 快捷颜色浮窗持久化恢复
             quickColorWindowOpen = prefs.getBoolean("quick_color_open", false)
+            quickColorWindowWasOpen = quickColorWindowOpen
             quickColorWindowX = prefs.getFloat("quick_color_x", -1f)
             quickColorWindowY = prefs.getFloat("quick_color_y", -1f)
             quickColorCollapsed = prefs.getBoolean("quick_color_collapsed", false)
@@ -3533,6 +3582,7 @@ class PaintViewModel : ViewModel() {
 
             // 快捷图层浮窗持久化恢复
             quickLayerWindowOpen = prefs.getBoolean("quick_layer_open", false)
+            quickLayerWindowWasOpen = quickLayerWindowOpen
             quickLayerWindowX = prefs.getFloat("quick_layer_x", -1f)
             quickLayerWindowY = prefs.getFloat("quick_layer_y", -1f)
             quickLayerCollapsed = prefs.getBoolean("quick_layer_collapsed", false)
