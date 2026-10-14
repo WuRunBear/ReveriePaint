@@ -6,11 +6,14 @@ package com.reverie.paint.model
 
 import com.reverie.paint.ui.create.CanvasPresetItem
 import com.reverie.paint.ui.create.CanvasUnit
+import com.reverie.paint.ui.create.CREATE_STACKED_FONT_SCALE
 import com.reverie.paint.ui.create.formatUnitValue
 import com.reverie.paint.ui.create.getAspectRatioLabel
 import com.reverie.paint.ui.create.pxToUnit
+import com.reverie.paint.ui.create.shouldStackCreateControls
 import com.reverie.paint.ui.create.unitToPx
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -120,5 +123,28 @@ class CreateCanvasLogicTest {
         val (portW, portH) = computePreviewTarget(availW, availH, 1080, 1920)
         assertEquals(59.62f, portW, 0.1f)
         assertEquals(106f, portH, 0.01f)
+    }
+
+    @Test
+    fun `shouldStackCreateControls keeps single row layout at normal font scale`() {
+        assertFalse(shouldStackCreateControls(1.0f))
+        assertFalse(shouldStackCreateControls(1.15f))
+        assertFalse(shouldStackCreateControls(1.29f))
+    }
+
+    @Test
+    fun `shouldStackCreateControls switches to vertical stacking once text is enlarged`() {
+        assertTrue(shouldStackCreateControls(CREATE_STACKED_FONT_SCALE))
+        assertTrue(shouldStackCreateControls(1.3f))
+        assertTrue(shouldStackCreateControls(1.5f))
+        // Android 字体大小最大档 (200%)
+        assertTrue(shouldStackCreateControls(2.0f))
+    }
+
+    @Test
+    fun `shouldStackCreateControls tolerates degenerate font scale values`() {
+        assertFalse(shouldStackCreateControls(0f))
+        assertFalse(shouldStackCreateControls(-1f))
+        assertFalse(shouldStackCreateControls(Float.NaN))
     }
 }

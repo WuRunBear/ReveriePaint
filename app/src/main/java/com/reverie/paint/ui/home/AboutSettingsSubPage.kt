@@ -631,7 +631,6 @@ private fun AboutGroupItem(
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -663,7 +662,17 @@ private fun AboutGroupItem(
                 }
             }
 
-            rightWidget?.invoke()
+            // 右侧控件 (开关 / 按钮) 一并进入加权池: 否则大字体时它会先测量并吃光整行宽度,
+            // 把左侧标题与摘要压成 0 宽竖排. 0.28 的份额在正常字号下 ≥ 该控件的固有宽度,
+            // CenterEnd 让它仍贴右对齐, 因此 1x 观感与改前一致 (实测无任何摘要多出一行).
+            rightWidget?.let { widget ->
+                Box(
+                    modifier = Modifier.weight(0.28f),
+                    contentAlignment = Alignment.CenterEnd,
+                ) {
+                    widget()
+                }
+            }
         }
     }
 }

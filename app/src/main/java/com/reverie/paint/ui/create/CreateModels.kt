@@ -61,6 +61,24 @@ fun formatUnitValue(value: Double, unit: CanvasUnit): String {
     }
 }
 
+/**
+ * 大字体布局阈值: 系统字体放大到该倍数以上时, 创建页两处「文字 + 不可压缩控件」的横排容器
+ * 改为纵向堆叠 (PortraitPresetBottomBar / CanvasDimensionsCard 头部).
+ *
+ * 背景: Compose Row 先测量非加权子项, 加权子项只吃剩余空间; 剩余空间耗尽时 weight 会被真的
+ * 压成 0 宽 (remainingToTarget 被 coerceAtLeast(0)), Text 在 0 宽约束下逐字符换行 → 文字竖排.
+ * 这两处的控件组 (胶囊按钮 / 单位切换 / 对调按钮) 内容不可压缩, 即使让它们进加权池, 份额
+ * 不足时按钮文字仍会被挤成竖排, 只能换行摆放, 因此这里按 fontScale 切换两套布局.
+ */
+const val CREATE_STACKED_FONT_SCALE = 1.3f
+
+/**
+ * 是否需要为大字体把「文字 + 固定控件」的横排容器改为纵排堆叠.
+ * @param fontScale Compose 实际驱动 sp→px 的有效缩放值 (LocalDensity.current.fontScale);
+ *                  Android 14 起 LocalConfiguration.fontScale 仅为参考值, 不可用于像素预算.
+ */
+fun shouldStackCreateControls(fontScale: Float): Boolean = fontScale >= CREATE_STACKED_FONT_SCALE
+
 data class CanvasPresetItem(
     val id: String = java.util.UUID.randomUUID().toString(),
     val name: String,

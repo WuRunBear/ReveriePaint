@@ -35,11 +35,13 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalConfiguration
 import java.util.Locale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.reverie.paint.R
@@ -899,6 +901,7 @@ private fun OrientationToggle(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CanvasDimensionsCard(
     unit: CanvasUnit,
@@ -921,71 +924,44 @@ private fun CanvasDimensionsCard(
             .background(colors.panel)
             .padding(16.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = stringResource(R.string.create_size_and_res),
-                color = colors.text,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                // Unit switcher segmented pills
-                Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(colors.panelHi)
-                        .padding(2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+        // 大字体下「尺寸与分辨率」标题与右侧控件组的固有宽度之和会超出卡片宽度,
+        // 横排时 Row 先测量右侧控件组, 标题与「对调」文字会被压成 0 宽竖排 → 改为纵向堆叠
+        if (shouldStackCreateControls(LocalDensity.current.fontScale)) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = stringResource(R.string.create_size_and_res),
+                    color = colors.text,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(Modifier.height(8.dp))
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
                 ) {
-                    CanvasUnit.values().forEach { u ->
-                        val isSelected = unit == u
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(if (isSelected) colors.accent else Color.Transparent)
-                                .clickable { onUnitChange(u) }
-                                .padding(horizontal = 7.dp, vertical = 3.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                text = u.symbol,
-                                color = if (isSelected) colors.onAccent else colors.subText,
-                                fontSize = 11.sp,
-                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                            )
-                        }
-                    }
+                    CanvasUnitSwitcher(unit = unit, onUnitChange = onUnitChange)
+                    SwapDimensionsChip(onSwap = onSwap)
                 }
-
-                // Swap dimensions button
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = stringResource(R.string.create_size_and_res),
+                    color = colors.text,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold
+                )
                 Row(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(colors.panelHi)
-                        .clickable { onSwap() }
-                        .padding(horizontal = 7.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_flip_horizontal),
-                        contentDescription = stringResource(R.string.create_swap_dimensions),
-                        tint = colors.accent,
-                        modifier = Modifier.size(12.dp)
-                    )
-                    Text(
-                        text = stringResource(R.string.create_swap_dimensions),
-                        color = colors.text,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                    CanvasUnitSwitcher(unit = unit, onUnitChange = onUnitChange)
+                    SwapDimensionsChip(onSwap = onSwap)
                 }
             }
         }
@@ -1098,6 +1074,73 @@ private fun CanvasDimensionsCard(
     }
 }
 
+// 单位切换胶囊组 (px/mm/cm/in): 横向不可压缩, 大字体下由父级 FlowRow 负责换行
+@Composable
+private fun CanvasUnitSwitcher(
+    unit: CanvasUnit,
+    onUnitChange: (CanvasUnit) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = Theme.current
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.panelHi)
+            .padding(2.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        CanvasUnit.values().forEach { u ->
+            val isSelected = unit == u
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (isSelected) colors.accent else Color.Transparent)
+                    .clickable { onUnitChange(u) }
+                    .padding(horizontal = 7.dp, vertical = 3.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = u.symbol,
+                    color = if (isSelected) colors.onAccent else colors.subText,
+                    fontSize = 11.sp,
+                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                )
+            }
+        }
+    }
+}
+
+// 对调宽高的图标胶囊
+@Composable
+private fun SwapDimensionsChip(
+    onSwap: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = Theme.current
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(colors.panelHi)
+            .clickable { onSwap() }
+            .padding(horizontal = 7.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(3.dp)
+    ) {
+        Icon(
+            painter = painterResource(R.drawable.ic_flip_horizontal),
+            contentDescription = stringResource(R.string.create_swap_dimensions),
+            tint = colors.accent,
+            modifier = Modifier.size(12.dp)
+        )
+        Text(
+            text = stringResource(R.string.create_swap_dimensions),
+            color = colors.text,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Medium
+        )
+    }
+}
+
 @Composable
 private fun PortraitPresetBottomBar(
     widthVal: Int,
@@ -1112,75 +1155,153 @@ private fun PortraitPresetBottomBar(
     modifier: Modifier = Modifier
 ) {
     val colors = Theme.current
-    Row(
+    // 右侧控件组是不可压缩的胶囊/图标按钮, 大字体下宽度会超过整行, 把左侧尺寸信息压成 0 宽竖排,
+    // 因此按 fontScale 切换「单行横排」与「信息在上 / 控件在下」两套布局
+    val stacked = shouldStackCreateControls(LocalDensity.current.fontScale)
+
+    Column(
         modifier = modifier
             .fillMaxWidth()
             .shadow(6.dp, RoundedCornerShape(18.dp))
             .clip(RoundedCornerShape(18.dp))
             .background(colors.panel)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 14.dp, vertical = 10.dp)
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = "${widthVal} × ${heightVal} px · ${ppiVal} DPI",
-                color = colors.text,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
+        if (stacked) {
+            PortraitPresetSummary(
+                widthVal = widthVal,
+                heightVal = heightVal,
+                ppiVal = ppiVal,
+                maxLayers = maxLayers,
+                modifier = Modifier.fillMaxWidth()
             )
-            Spacer(Modifier.height(2.dp))
-            val orientationText = if (widthVal >= heightVal) stringResource(R.string.create_orientation_landscape) else stringResource(R.string.create_orientation_portrait)
-            Text(
-                text = "$orientationText · " + stringResource(R.string.create_max_layers_desc, maxLayers),
-                color = colors.subText,
-                fontSize = 11.sp
+            Spacer(Modifier.height(10.dp))
+            PortraitPresetControls(
+                animationCanvas = animationCanvas,
+                onAnimationCanvasChange = onAnimationCanvasChange,
+                onSwap = onSwap,
+                onCustomize = onCustomize,
+                onCreate = onCreate,
+                modifier = Modifier.fillMaxWidth()
             )
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                PortraitPresetSummary(
+                    widthVal = widthVal,
+                    heightVal = heightVal,
+                    ppiVal = ppiVal,
+                    maxLayers = maxLayers,
+                    modifier = Modifier.weight(1f)
+                )
+                PortraitPresetControls(
+                    animationCanvas = animationCanvas,
+                    onAnimationCanvasChange = onAnimationCanvasChange,
+                    onSwap = onSwap,
+                    onCustomize = onCustomize,
+                    onCreate = onCreate
+                )
+            }
+        }
+    }
+}
+
+// 底栏左侧尺寸信息: 形如「1260 × 2800 px · 300 DPI」, 是唯一有弹性的一侧
+@Composable
+private fun PortraitPresetSummary(
+    widthVal: Int,
+    heightVal: Int,
+    ppiVal: Int,
+    maxLayers: Int,
+    modifier: Modifier = Modifier
+) {
+    val colors = Theme.current
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Text(
+            text = "${widthVal} × ${heightVal} px · ${ppiVal} DPI",
+            color = colors.text,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Spacer(Modifier.height(2.dp))
+        val orientationText = if (widthVal >= heightVal) stringResource(R.string.create_orientation_landscape) else stringResource(R.string.create_orientation_portrait)
+        Text(
+            text = "$orientationText · " + stringResource(R.string.create_max_layers_desc, maxLayers),
+            color = colors.subText,
+            fontSize = 11.sp
+        )
+    }
+}
+
+// 底栏右侧操作胶囊组: 用 FlowRow 承载, 空间不足时整颗胶囊换到下一行而不是被压扁
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun PortraitPresetControls(
+    animationCanvas: Boolean,
+    onAnimationCanvasChange: (Boolean) -> Unit,
+    onSwap: () -> Unit,
+    onCustomize: () -> Unit,
+    onCreate: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val colors = Theme.current
+    FlowRow(
+        modifier = modifier,
+        verticalArrangement = Arrangement.Center,
+        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)
+    ) {
+        Box(
+            modifier = Modifier
+                .heightIn(min = 36.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(if (animationCanvas) colors.accent else colors.panelHi)
+                .clickable { onAnimationCanvasChange(!animationCanvas) }
+                .padding(horizontal = 10.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    painterResource(R.drawable.ic_clock),
+                    contentDescription = stringResource(R.string.create_anim_canvas),
+                    tint = if (animationCanvas) colors.onAccent else colors.text,
+                    modifier = Modifier.size(13.dp)
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(
+                    text = if (animationCanvas) stringResource(R.string.create_anim_tag) else stringResource(R.string.create_static_canvas),
+                    color = if (animationCanvas) colors.onAccent else colors.text,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                // Beta 标记: 动画画布功能尚在测试阶段
+                Spacer(Modifier.width(3.dp))
+                Text(
+                    text = "Beta",
+                    color = if (animationCanvas) colors.onAccent else colors.accent,
+                    fontSize = 8.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
 
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        // 纯图标按钮: 外层 48dp 只负责命中区域, 视觉圆点仍保持 36dp
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(CircleShape)
+                .clickable { onSwap() },
+            contentAlignment = Alignment.Center
         ) {
-            Box(
-                modifier = Modifier
-                    .height(36.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(if (animationCanvas) colors.accent else colors.panelHi)
-                    .clickable { onAnimationCanvasChange(!animationCanvas) }
-                    .padding(horizontal = 10.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(
-                        painterResource(R.drawable.ic_clock),
-                        contentDescription = stringResource(R.string.create_anim_canvas),
-                        tint = if (animationCanvas) colors.onAccent else colors.text,
-                        modifier = Modifier.size(13.dp)
-                    )
-                    Spacer(Modifier.width(4.dp))
-                    Text(
-                        text = if (animationCanvas) stringResource(R.string.create_anim_tag) else stringResource(R.string.create_static_canvas),
-                        color = if (animationCanvas) colors.onAccent else colors.text,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    // Beta 标记: 动画画布功能尚在测试阶段
-                    Spacer(Modifier.width(3.dp))
-                    Text(
-                        text = "Beta",
-                        color = if (animationCanvas) colors.onAccent else colors.accent,
-                        fontSize = 8.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-            }
-
             Box(
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(colors.panelHi)
-                    .clickable { onSwap() },
+                    .background(colors.panelHi),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -1190,49 +1311,49 @@ private fun PortraitPresetBottomBar(
                     modifier = Modifier.size(15.dp)
                 )
             }
+        }
 
-            Box(
-                modifier = Modifier
-                    .height(36.dp)
-                    .clip(RoundedCornerShape(18.dp))
-                    .background(colors.panelHi)
-                    .clickable { onCustomize() }
-                    .padding(horizontal = 12.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = stringResource(R.string.create_adjust),
-                    color = colors.text,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-
-            val createSource = remember { MutableInteractionSource() }
-            val isCreatePressed by createSource.collectIsPressedAsState()
-            val btnScale by animateFloatAsState(
-                targetValue = if (isCreatePressed) 0.96f else 1.0f,
-                animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow),
-                label = "PortraitCreateScale"
+        Box(
+            modifier = Modifier
+                .heightIn(min = 36.dp)
+                .clip(RoundedCornerShape(18.dp))
+                .background(colors.panelHi)
+                .clickable { onCustomize() }
+                .padding(horizontal = 12.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = stringResource(R.string.create_adjust),
+                color = colors.text,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Medium
             )
+        }
 
-            Box(
-                modifier = Modifier
-                    .scale(btnScale)
-                    .height(38.dp)
-                    .clip(RoundedCornerShape(19.dp))
-                    .background(colors.accent)
-                    .clickable(interactionSource = createSource, indication = null) { onCreate() }
-                    .padding(horizontal = 16.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = stringResource(R.string.create_title),
-                    color = colors.onAccent,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
+        val createSource = remember { MutableInteractionSource() }
+        val isCreatePressed by createSource.collectIsPressedAsState()
+        val btnScale by animateFloatAsState(
+            targetValue = if (isCreatePressed) 0.96f else 1.0f,
+            animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMediumLow),
+            label = "PortraitCreateScale"
+        )
+
+        Box(
+            modifier = Modifier
+                .scale(btnScale)
+                .heightIn(min = 38.dp)
+                .clip(RoundedCornerShape(19.dp))
+                .background(colors.accent)
+                .clickable(interactionSource = createSource, indication = null) { onCreate() }
+                .padding(horizontal = 16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = stringResource(R.string.create_title),
+                color = colors.onAccent,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
@@ -1439,14 +1560,24 @@ private fun CanvasPresetCard(
                     text = item.description,
                     color = colors.subText,
                     fontSize = 12.sp,
-                    maxLines = 1
+                    // 预设说明普遍长于一行且无「查看全文」入口, 单行硬截断属于无障碍缺陷,
+                    // 改为两行 + 省略号 (文字变短时仍只占一行, 不影响正常字号观感)
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
 
         Spacer(Modifier.width(12.dp))
 
-        Column(horizontalAlignment = Alignment.End) {
+        // 规格信息列与左侧名称列同时进入加权池: 大字体时 Row 先测量非加权项会把剩余空间吃光,
+        // 只给左列 weight 会让左列真的塌成 0 宽 (文字逐字符竖排), 这里按 1 : 0.6 分配弹性,
+        // 正常字号下右列份额 (≈120dp) 大于其文字固有宽度 (≈80dp), 视觉与改前一致
+        Column(
+            modifier = Modifier.weight(0.6f),
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.Center
+        ) {
             Text(
                 text = "${item.width} × ${item.height}",
                 color = colors.text,
@@ -1462,21 +1593,29 @@ private fun CanvasPresetCard(
         }
 
         if (onDelete != null) {
-            Spacer(Modifier.width(10.dp))
+            Spacer(Modifier.width(4.dp))
             Box(
                 modifier = Modifier
-                    .size(32.dp)
+                    .size(48.dp)
                     .clip(CircleShape)
-                    .background(colors.panelHi)
                     .clickable { onDelete() },
                 contentAlignment = Alignment.Center
             ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_trash),
-                    contentDescription = stringResource(R.string.create_preset_delete_title),
-                    tint = colors.subText,
-                    modifier = Modifier.size(15.dp)
-                )
+                // 视觉圆点仍是 32dp, 外层 48dp 只负责扩大触摸命中区域
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(CircleShape)
+                        .background(colors.panelHi),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_trash),
+                        contentDescription = stringResource(R.string.create_preset_delete_title),
+                        tint = colors.subText,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
             }
         }
     }
